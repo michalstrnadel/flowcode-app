@@ -184,6 +184,14 @@ public enum SwarmLineDecoder {
             // Not an agent-result line; could still be a session-end system summary.
             return decodeSessionEnd(obj)
         }
+        // Skip non-terminal toolUseResult lines (e.g. "async_launched" launch acks for
+        // background/async agents, or in-progress/running pings) so a just-launched agent
+        // isn't flared as done and its real completion isn't dropped by applyAgentDone's
+        // idempotent terminal guard. Only a line representing a real return emits .agentDone.
+        if let rawStatus = (tur["status"] as? String)?.lowercased(),
+           ["async_launched", "in_progress", "running", "started", "pending", "queued", "launched"].contains(rawStatus) {
+            return nil
+        }
         let status = SwarmAgentResultStatus.from(raw: tur["status"] as? String)
         let tokens = intValue(tur["totalTokens"])
         let durationMs = intValue(tur["totalDurationMs"])

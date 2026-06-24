@@ -102,7 +102,10 @@ cp -R "${VENV}" "${DEST}"
 rm -rf "${DEST}/bin/python" "${DEST}/bin/python3"
 ln -s "../../python-cpython/bin/python3" "${DEST}/bin/python3" 2>/dev/null || true
 ln -s "python3" "${DEST}/bin/python" 2>/dev/null || true
-mv "${DEST}-cpython" "${APP}/Contents/Resources/python-cpython"
+# NOTE: no `mv` here. The `cp -R "${WORK}/python" "${DEST}-cpython"` above already
+# placed the interpreter at its final path (${DEST}-cpython is exactly
+# ${APP}/Contents/Resources/python-cpython). Moving a directory onto its own
+# existing path moves it INTO itself and exits non-zero, which aborts under set -e.
 
 log "done. embedded python at ${DEST}"
 log "remember: each nested .so + the interpreter must be codesigned (sign_notarize.sh)"

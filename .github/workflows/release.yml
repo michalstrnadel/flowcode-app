@@ -48,11 +48,15 @@ jobs:
 
   build:
     needs: preflight
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
       matrix:
-        arch: [arm64, x86_64]
+        include:
+          - arch: arm64
+            runner: macos-14
+          - arch: x86_64
+            runner: macos-13
     env:
       SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
       NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
@@ -161,8 +165,13 @@ jobs:
           gh release create "v${VERSION}" \
             --title "flowcode v${VERSION}" \
             --generate-notes \
-            dist/flowcode-*.zip \
-            dist/appcast.xml
+            dist/flowcode-*.zip
+          if [ -f dist/appcast.xml ]; then
+            gh release upload "v${VERSION}" dist/appcast.xml
+          else
+            echo "::error::dist/appcast.xml missing — appcast generation did not run" >&2
+            exit 1
+          fi
 
       - name: Bump Homebrew cask
         env:

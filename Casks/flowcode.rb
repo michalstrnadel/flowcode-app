@@ -7,9 +7,12 @@
 #
 cask "flowcode" do
   version "0.1.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 arm:   "0000000000000000000000000000000000000000000000000000000000000000",
+         intel: "0000000000000000000000000000000000000000000000000000000000000000"
 
-  url "https://github.com/mbailey/flowcode/releases/download/v#{version}/flowcode-#{version}.zip",
+  arch arm: "arm64", intel: "x86_64"
+
+  url "https://github.com/mbailey/flowcode/releases/download/v#{version}/flowcode-#{version}-#{arch}.zip",
       verified: "github.com/mbailey/flowcode/"
   name "flowcode"
   desc "Real-time, interruptible voice for Claude Code"

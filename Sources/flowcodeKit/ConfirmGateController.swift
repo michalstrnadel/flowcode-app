@@ -10,8 +10,10 @@
 //      (Touch ID via deviceOwnerAuthenticationWithBiometrics, falling back to
 //      deviceOwnerAuthentication / device passcode),
 //    * starts a hard timeout that resolves to DENY,
-//    * ducks/flags TTS while a prompt is on screen (so the assistant's own speech
-//      cannot be heard as a "yes"),
+//    * exposes an injectable TTS-ducking hook (`TTSDuck`) so a host can silence/flag
+//      TTS while a prompt is on screen; NOTE the default `TTSDuck()` is a no-op, so
+//      unless a real duck is injected this is inert (defense-in-depth only — the hard
+//      no-voice-to-verdict invariant below does not rely on it),
 //    * sends the verdict back ONLY via an injected closure mapped to
 //      `ControlCommand.confirm(id:verdict:)`, and audits every outcome.
 //
@@ -209,6 +211,14 @@ public final class ConfirmGateController {
         pending = nil
         awaitingAuth = false
         duck.setDucked(false)
+        // If a blocking modal alert is still on screen (e.g. the timeout fired while
+        // runModal() pumps the main run loop), tear it down so the resolved request's
+        // dialog does not linger. abortModal() is a no-op when no modal is running, so
+        // the normal button-click paths (which return from runModal naturally) are
+        // unaffected.
+        #if canImport(AppKit)
+        NSApp.abortModal()
+        #endif
         sendVerdict(request.id, outcome.verdict)
         audit.append(command: request.command, risk: request.risk,
                      outcome: outcome, epoch: now())

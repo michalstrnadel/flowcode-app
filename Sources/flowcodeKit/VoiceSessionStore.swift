@@ -1,0 +1,113 @@
+// VoiceSessionStore.swift
+// flowcode — observable store that mirrors the Python voice core's session state.
+//
+// This is a thin, MainActor-isolated view model. It subscribes to an IPCClient's
+// inbound message stream (StatusMessage) and to its connection-state signal, then
+// projects them onto a handful of @Observable properties the UI binds to.
+
+import Foundation
+import Observation
+
+/// Observable store reflecting the live state of the voice session.
+///
+/// All mutation happens on the main actor: `bind(to:)` spawns MainActor `Task`s
+/// that consume the client's async streams and update the published properties.
+@MainActor
+@Observable
+public final class VoiceSessionStore {
+
+    // MARK: - Published state
+
+    /// Current voice-core state. Defaults to idle until the core reports otherwise.
+    public var state: VoiceState = .idle
+
+    /// True while a session is in flight (between SESSION_START and SESSION_END).
+    public var sessionActive: Bool = false
+
+    /// Whether the IPC socket to the Python core is currently connected.
+    public var connected: Bool = false
+
+    /// Most recent assistant-TTS amplitude (RMS), 0...~1. Phase 4 telemetry.
+    public var lastRMS: Double = 0
+
+    // MARK: - Lifecycle
+
+    public init() {}
+
+    /// Holds the consumer tasks so re-binding cancels the previous subscriptions.
+    private var messageTask: Task<Void, Never>?
+    private var connectionTask: Task<Void, Never>?
+
+    // MARK: - Binding
+
+    /// Begin consuming `client`'s message and connection streams on the main actor.
+    ///
+    /// Mapping rules (per contract):
+    ///   - event_type SESSION_START  -> sessionActive = true
+    ///   - event_type SESSION_END    -> sessionActive = false, state = .idle
+    ///   - any message with non-nil `state` -> self.state = state
+    ///   - type == "amplitude"       -> lastRMS = rms (when present)
+    ///   - type == "barge_in"        -> tolerated (no state change required)
+    ///
+    /// Calling `bind(to:)` again cancels any prior subscriptions first.
+    public func bind(to client: IPCClient) {
+        // Cancel any existing subscriptions so we never double-consume.
+        messageTask?.cancel()
+        connectionTask?.cancel()
+
+        // Consume inbound status messages and project them onto our state.
+        messageTask = Task { [weak self] in
+            for await message in client.messages {
+                guard let self else { return }
+                self.apply(message)
+            }
+        }
+
+        // Track the connection-state signal so the UI can show online/offline.
+        connectionTask = Task { [weak self] in
+            for await isConnected in client.connectionState {
+                guard let self else { return }
+                self.connected = isConnected
+            }
+        }
+    }
+
+    // MARK: - Reducer
+
+    /// Apply a single decoded message to the published state. MainActor-isolated.
+    private func apply(_ message: StatusMessage) {
+        switch message.type {
+        case "amplitude":
+            // Assistant TTS level telemetry; ignore if rms is absent.
+            if let rms = message.rms {
+                lastRMS = rms
+            }
+
+        case "barge_in":
+            // Out-of-band interrupt notification. Tolerated; nothing to mutate here.
+            break
+
+        case "event":
+            // Session lifecycle events arrive via event_type.
+            switch message.eventType {
+            case "SESSION_START":
+                sessionActive = true
+            case "SESSION_END":
+                sessionActive = false
+                state = .idle
+                return // SESSION_END forces idle; ignore any piggybacked state below.
+            default:
+                break
+            }
+
+        default:
+            // Unknown message types are tolerated; still honor any state field below.
+            break
+        }
+
+        // Any message may carry an explicit state; when present it wins.
+        if let newState = message.state {
+            state = newState
+        }
+    }
+}

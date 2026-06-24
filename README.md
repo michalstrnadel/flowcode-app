@@ -33,9 +33,14 @@ a single Unix-domain socket (status + control). See [`PLAN.md`](PLAN.md) for the
 ## Develop
 
 ```sh
-swift build        # builds the menu-bar app (Swift 6, macOS 14+)
-swift run flowcode # runs the scaffold (a menu-bar item)
+swift build                 # builds flowcodeKit + the menu-bar app (Swift 6, macOS 14+)
+swift run flowcode          # runs the menu-bar app (status icon reflects the voice core)
+swift run flowcode-selftest # verifies the IPC layer (wire contract + AF_UNIX loopback)
 ```
+
+Layout: `flowcodeKit` (testable library — models, IPC client, stores, status UI),
+`flowcode` (thin executable), `flowcode-selftest` (runnable checks). `swift test`/XCTest
+needs full Xcode; the self-test executable runs everywhere, including Command Line Tools.
 
 ## Security
 

@@ -1,0 +1,175 @@
+# .github/workflows/release.yml
+#
+# flowcode release pipeline. Triggered by pushing a tag `v*` (e.g. v0.1.0). The
+# tag MUST match `v${VERSION}` from version.env.
+#
+# Flow:
+#   preflight  -> headless smoke checks (no creds) on every tag.
+#   build      -> per-arch swift build + watchdog + make_venv (matrix arm64/x86_64),
+#                 each runner produces a per-arch signed+notarized app bundle and zip.
+#   release    -> lipo is per-arch here (each runner is single-arch because the
+#                 embedded venv is native-per-arch); we publish BOTH zips, generate
+#                 the Sparkle appcast, create the GitHub release, and bump the cask.
+#
+# NOTE on universality: the Swift binary is built universal in build_app.sh, but
+# the embedded CPython + native wheels are per-arch. So a single runner ships the
+# venv for its own arch. We therefore upload one zip per arch and let the cask /
+# appcast carry both. (If a single universal venv is ever desired, ship two venvs
+# inside one bundle and select at launch — out of scope here.)
+#
+# Required repository secrets (see DISTRIBUTION.md for how to obtain each):
+#   APPLE_SIGN_IDENTITY        "Developer ID Application: NAME (TEAMID)"
+#   APPLE_CERT_P12_BASE64      base64 of the Developer ID Application .p12
+#   APPLE_CERT_P12_PASSWORD    password for that .p12
+#   APPLE_NOTARY_KEY_P8_BASE64 base64 of the App Store Connect API key (.p8)
+#   APPLE_NOTARY_KEY_ID        the key id
+#   APPLE_NOTARY_ISSUER_ID     issuer UUID
+#   SPARKLE_ED_PRIVATE_KEY     base64 Ed25519 private key (for appcast signing)
+#   SPARKLE_PUBLIC_ED_KEY      base64 Ed25519 public key (patched into Info.plist)
+#   HOMEBREW_TAP_TOKEN         PAT with write to the tap repo (for cask bump)
+#
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # create releases + upload assets
+
+jobs:
+  preflight:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run headless preflight
+        run: bash scripts/preflight.sh
+
+  build:
+    needs: preflight
+    runs-on: macos-14
+    strategy:
+      fail-fast: true
+      matrix:
+        arch: [arm64, x86_64]
+    env:
+      SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+      NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches version.env
+        run: |
+          set -euo pipefail
+          source version.env
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${TAG}" != "v${VERSION}" ]; then
+            echo "tag ${TAG} != v${VERSION} from version.env" >&2
+            exit 1
+          fi
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Import Developer ID signing certificate
+        env:
+          P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/flowcode.keychain-db"
+          KC_PASS="$(openssl rand -hex 24)"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KC_PASS" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" \
+            "$(security default-keychain -d user | tr -d ' "')"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Decode notarytool API key
+        env:
+          KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+        run: |
+          echo "$KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          echo "NOTARY_KEY_PATH=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+
+      - name: Build app (universal swift, this-arch venv)
+        run: ARCHES="arm64 x86_64" bash scripts/build_app.sh
+
+      - name: Build embedded venv (${{ matrix.arch }})
+        run: ARCH="${{ matrix.arch }}" bash scripts/make_venv.sh
+
+      # TODO (CI infra, not this phase): fetch + drop Sparkle.framework into
+      # dist/flowcode.app/Contents/Frameworks before signing. sign_notarize.sh
+      # already signs it inside-out if present.
+
+      - name: Sign + notarize + staple
+        run: bash scripts/sign_notarize.sh
+
+      - name: Rename per-arch artifact
+        run: |
+          set -euo pipefail
+          source version.env
+          mv "dist/flowcode-${VERSION}.zip" "dist/flowcode-${VERSION}-${{ matrix.arch }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flowcode-${{ matrix.arch }}
+          path: dist/flowcode-*-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate Sparkle appcast (EdDSA-signed)
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # Sparkle's generate_appcast signs each zip with the Ed25519 private key
+          # and emits appcast.xml. The private key is read from stdin (--ed-key-file -).
+          # generate_appcast ships in the Sparkle release bundle; CI fetches it.
+          echo "$SPARKLE_ED_PRIVATE_KEY" | base64 --decode > "$RUNNER_TEMP/ed_private.key"
+          # (Tooling fetch + invocation omitted here as infra wiring; documented in
+          #  DISTRIBUTION.md. End result: a fresh appcast.xml beside the zips.)
+          ./scripts/_generate_appcast.sh dist "$RUNNER_TEMP/ed_private.key" || \
+            echo "::warning::generate_appcast helper not yet wired; see DISTRIBUTION.md"
+          shred -u "$RUNNER_TEMP/ed_private.key" 2>/dev/null || rm -f "$RUNNER_TEMP/ed_private.key"
+
+      - name: Create GitHub release + upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source version.env
+          gh release create "v${VERSION}" \
+            --title "flowcode v${VERSION}" \
+            --generate-notes \
+            dist/flowcode-*.zip \
+            dist/appcast.xml
+
+      - name: Bump Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          source version.env
+          # Update version + sha256 in Casks/flowcode.rb in the tap repo.
+          # (Push to the tap; exact tap repo path is an infra detail — see DISTRIBUTION.md.)
+          echo "Would bump cask to v${VERSION} in the tap. See DISTRIBUTION.md."

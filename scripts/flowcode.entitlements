@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened Runtime entitlements for the flowcode.app main executable.
+
+  flowcode is UNSANDBOXED (App Sandbox is incompatible with the embedded Python
+  sidecar + localhost STT/TTS services + LaunchAgents — see PLAN.md / BOUNDARIES.md).
+  It still runs with Hardened Runtime + notarization so Gatekeeper accepts it.
+
+  com.apple.security.cs.disable-library-validation is REQUIRED: the bundled
+  python-build-standalone interpreter loads native wheel .so files (PortAudio,
+  onnxruntime, numpy) that are signed with OUR Developer ID but are not part of
+  the app's own signature team-of-record in the way library validation expects.
+  Without disabling it, the interpreter aborts the moment it dlopen()s a wheel.
+
+  device.audio-input is the mic entitlement that pairs with
+  NSMicrophoneUsageDescription so flowcode is the responsible process for the
+  TCC grant (the grant must attach to flowcode, not to a child python or the
+  spawning terminal).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- The embedded interpreter JIT-compiles nothing, but some wheels mmap
+         executable pages; allow-unsigned-executable-memory keeps them working
+         under Hardened Runtime without weakening more than necessary. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>

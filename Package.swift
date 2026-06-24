@@ -21,7 +21,8 @@ let package = Package(
         .executableTarget(
             name: "flowcode",
             dependencies: ["flowcodeKit"],
-            path: "Sources/flowcode"
+            path: "Sources/flowcode",
+            exclude: ["Info.plist"]
         ),
         // Runnable verification harness (works under Command Line Tools, where
         // `swift test`/XCTest is unavailable). Run with: swift run flowcode-selftest

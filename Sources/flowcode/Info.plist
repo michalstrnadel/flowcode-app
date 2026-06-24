@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist for the distributed flowcode.app bundle.
+
+  main.swift already calls `app.setActivationPolicy(.accessory)` at runtime, so the
+  menu-bar-only behaviour works in `swift run` during development. For a packaged,
+  signed, notarized .app the bundle ALSO needs this plist:
+
+    * LSUIElement=YES               — agent app: no Dock icon, no menu bar, before launch
+    * NSMicrophoneUsageDescription  — REQUIRED for the TCC mic prompt; without it the
+                                      prompt never appears and AVCaptureDevice silently
+                                      denies. flowcode must be the responsible process.
+    * CFBundle* / hardened runtime  — required for codesign + notarization to succeed.
+
+  CRITICAL (see DISTRIBUTION.md): re-sign the app AFTER any edit to this plist.
+  Editing Info.plist invalidates the code signature, and an invalid signature makes
+  macOS silently drop the mic TCC grant — the prompt just never shows again.
+
+  The ${...} tokens are substituted by scripts/build_app.sh from version.env at
+  bundle-assembly time.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>flowcode</string>
+    <key>CFBundleDisplayName</key>
+    <string>flowcode</string>
+    <key>CFBundleIdentifier</key>
+    <string>${BUNDLE_ID}</string>
+    <key>CFBundleExecutable</key>
+    <string>flowcode</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${BUILD}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+
+    <!-- Menu-bar agent: no Dock icon, no app menu. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- App category (Developer Tools) for Finder / cask metadata. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+
+    <!-- TCC: mic usage string is mandatory for the prompt to appear. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>flowcode listens to your voice so you can talk to Claude Code hands-free, with instant interruption.</string>
+
+    <!-- Sparkle self-update feed. Public Ed25519 key is injected at sign time
+         (or kept here once stable). Both keys are read by Sparkle at runtime. -->
+    <key>SUFeedURL</key>
+    <string>${APPCAST_URL}</string>
+    <key>SUPublicEDKey</key>
+    <string>${SPARKLE_PUBLIC_ED_KEY}</string>
+    <key>SUEnableInstallerLauncherService</key>
+    <false/>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>

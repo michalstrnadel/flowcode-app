@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  appcast.xml — Sparkle update feed for flowcode.
+
+  This is a TEMPLATE. CI (release.yml) regenerates a fresh <item> per release
+  using Sparkle's `generate_appcast` tool, which fills in:
+    * sparkle:version            (= CFBundleVersion / BUILD)
+    * sparkle:shortVersionString (= CFBundleShortVersionString / VERSION)
+    * length                     (zip byte size)
+    * sparkle:edSignature        (EdDSA signature of the zip; needs the private key)
+    * url                        (GitHub release download URL)
+
+  The app's Info.plist SUFeedURL points at the published copy of this file
+  (APPCAST_URL in version.env). SUPublicEDKey in Info.plist must match the
+  Ed25519 key pair whose private half signed the items below.
+
+  Do NOT hand-edit signatures — an item with a wrong/empty sparkle:edSignature
+  is rejected by Sparkle and the update silently fails.
+-->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>flowcode</title>
+    <link>https://github.com/mbailey/flowcode</link>
+    <description>Real-time, interruptible voice for Claude Code.</description>
+    <language>en</language>
+
+    <!-- Example item shape — replaced wholesale by generate_appcast in CI. -->
+    <item>
+      <title>Version 0.1.0</title>
+      <description><![CDATA[
+        <ul>
+          <li>Initial flowcode release.</li>
+        </ul>
+      ]]></description>
+      <pubDate>Tue, 24 Jun 2026 00:00:00 +0000</pubDate>
+      <sparkle:version>1</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://github.com/mbailey/flowcode/releases/download/v0.1.0/flowcode-0.1.0.zip"
+        sparkle:version="1"
+        sparkle:shortVersionString="0.1.0"
+        sparkle:edSignature="REPLACED_BY_GENERATE_APPCAST"
+        length="0"
+        type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>

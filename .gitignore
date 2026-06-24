@@ -1,0 +1,26 @@
+# Swift / SwiftPM
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+Package.resolved.bak
+
+# macOS
+.DS_Store
+
+# Build / release artifacts
+/dist/
+*.app
+*.zip
+*.dmg
+
+# Embedded Python venv (built at package time, not committed)
+/Resources/python/
+/Sources/flowcode/Resources/python/
+
+# Secrets / signing
+*.p8
+*.p12
+.release.env
+.mac-release.env
+sparkle_private_key*

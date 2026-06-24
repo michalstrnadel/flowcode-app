@@ -217,7 +217,14 @@ public final class ConfirmGateController {
         // the normal button-click paths (which return from runModal naturally) are
         // unaffected.
         #if canImport(AppKit)
-        NSApp.abortModal()
+        // abortModal() raises NSInternalInconsistencyException if no modal session
+        // is running, so only abort when a modal window is actually up (the timeout
+        // path, where runModal() is still pumping). On button/Esc/Touch-ID paths
+        // runModal() has already returned, so modalWindow is nil and we must NOT
+        // call abortModal().
+        if NSApp.modalWindow != nil {
+            NSApp.abortModal()
+        }
         #endif
         sendVerdict(request.id, outcome.verdict)
         audit.append(command: request.command, risk: request.risk,

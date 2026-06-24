@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = VoiceSessionStore()
     private let client = IPCClient()              // actor
     private var statusController: StatusItemController?
+    private var hud: HUDController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Request microphone access up front so the TCC grant is attributed to
@@ -34,6 +35,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onToggleSession: { [weak self] in self?.toggleSession() },
             onQuit: { NSApp.terminate(nil) }
         )
+
+        // Jarvis HUD: the floating orb that reacts to the live voice state.
+        let hud = HUDController(store: store, settings: settings)
+        self.hud = hud
+        hud.start()
     }
 
     /// Start or stop a voice session based on the current session state.

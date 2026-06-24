@@ -12,6 +12,8 @@
 
 import Foundation
 import Darwin
+import Metal
+import simd
 import flowcodeKit
 
 // MARK: - tiny check harness
@@ -156,9 +158,30 @@ func loopbackChecks() async {
     checks.check(got.contains("{\"cmd\":\"start\"}"), "server received start cmd over socket")
 }
 
+// MARK: - jarvis orb (phase 2) checks
+
+@MainActor
+func metalChecks() async {
+    print("== jarvis orb (phase 2) ==")
+    checks.check(MemoryLayout<OrbUniforms>.stride == 48, "OrbUniforms stride == 48 (matches MSL 3x float4)")
+    checks.check(orbParams(for: .idle).motion != orbParams(for: .speaking).motion,
+                 "orbParams distinct per state (idle vs speaking)")
+    if let device = MTLCreateSystemDefaultDevice() {
+        do {
+            _ = try OrbMetalView.makePipeline(device: device)
+            checks.check(true, "orb shader compiles + pipeline builds at runtime (no offline metal compiler)")
+        } catch {
+            checks.check(false, "orb pipeline build failed: \(error)")
+        }
+    } else {
+        print("  skip: no Metal device available (headless)")
+    }
+}
+
 // MARK: - entry
 
 wireChecks()
 await loopbackChecks()
+await metalChecks()
 print(checks.failures == 0 ? "\nALL PASS" : "\n\(checks.failures) FAILURE(S)")
 exit(checks.failures == 0 ? 0 : 1)

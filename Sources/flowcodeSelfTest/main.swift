@@ -178,10 +178,84 @@ func metalChecks() async {
     }
 }
 
+// MARK: - swarm (phase 8) checks
+
+@MainActor
+func swarmChecks() {
+    print("== swarm (phase 8) ==")
+
+    // 1) JSONL decoders against REAL on-disk line shapes.
+    let spawnLine = #"{"type":"user","isSidechain":true,"agentId":"a46e7b2c04daf30b7","slug":"litellm-investigator","sessionId":"s","message":{"role":"user","content":"hi"}}"#
+    let spawn = SwarmLineDecoder.decode(spawnLine, origin: .agentFile(agentIdFromFilename: "a46e7b2c04daf30b7"))
+    checks.check(spawn == .agentSpawn(agentId: "a46e7b2c04daf30b7", slug: "litellm-investigator"),
+                 "decode agent-<id>.jsonl spawn line")
+
+    let toolLine = #"{"type":"assistant","agentId":"a46e7b2c04daf30b7","message":{"role":"assistant","content":[{"type":"text","text":"x"},{"type":"tool_use","name":"Bash","input":{}}]}}"#
+    let tool = SwarmLineDecoder.decode(toolLine, origin: .agentFile(agentIdFromFilename: "a46e7b2c04daf30b7"))
+    checks.check(tool == .toolUse(agentId: "a46e7b2c04daf30b7", tool: "Bash"), "decode appended tool_use line")
+
+    let doneLine = #"{"type":"user","toolUseResult":{"status":"completed","agentId":"a0d942e24aab08a0a","agentType":"researcher","totalTokens":51272,"totalDurationMs":69169,"totalToolUseCount":14,"usage":{"input_tokens":4}}}"#
+    let done = SwarmLineDecoder.decode(doneLine, origin: .parentSession)
+    checks.check(done == .agentDone(agentId: "a0d942e24aab08a0a", status: .completed, tokens: 51272, durationMs: 69169, toolUseCount: 14),
+                 "decode parent toolUseResult completion")
+
+    checks.check(SwarmLineDecoder.agentId(fromFilename: "agent-a46e7b2c04daf30b7.jsonl") == "a46e7b2c04daf30b7",
+                 "agentId parsed from filename")
+    checks.check(SwarmLineDecoder.decode(#"{"hook":"Stop"}"#, origin: .hook) == .stop, "decode Stop hook ping")
+
+    // 2) Cap-at-16 + done-arc aggregation (deterministic clock).
+    let s = SwarmState(now: { 0 })
+    for i in 0..<20 { s.applyAgentSpawn(agentId: "id\(i)", slug: nil) }
+    checks.check(s.nodes.count == SwarmState.maxVisibleNodes, "nodes capped at 16")
+    checks.check(s.totalSpawned == 20, "totalSpawned counts all 20")
+    s.applyAgentDone(agentId: "id0", status: .completed, tokens: 100)
+    checks.check(s.nodes.first(where: { $0.id == "id0" })?.state == .done, "visible node -> done")
+    checks.check(s.nodes.first(where: { $0.id == "id0" })?.tokens == 100, "tokens authoritative on done")
+    let beforeArc = s.aggregatedDoneArc
+    s.applyAgentDone(agentId: "id18", status: .completed) // id18 never got a visible node (cap)
+    checks.check(s.aggregatedDoneArc == beforeArc + 1, "evicted completion -> aggregated done arc")
+    s.applyAgentDone(agentId: "id1", status: .failed)
+    checks.check(s.nodes.first(where: { $0.id == "id1" })?.state == .failed, "node -> failed (desaturated red)")
+
+    // 3) collapse + reset.
+    s.apply(.stop)
+    checks.check(s.collapsed, "stop -> collapsed")
+    s.reset()
+    checks.check(!s.collapsed && s.nodes.isEmpty && s.aggregatedDoneArc == 0 && s.totalSpawned == 0,
+                 "reset clears everything")
+}
+
+// MARK: - watchdog wait-status decode (phase 9)
+//
+// The watchdog (Helpers/flowcode-watchdog) decodes the Darwin wait(2) status by
+// hand because the W* helpers are C function-like macros Swift cannot import.
+// Mirror that exact decode here so the contract is covered by the selftest
+// (the watchdog itself is a standalone executable with no flowcodeKit dep).
+func watchdogChecks() {
+    print("== watchdog wait-status decode (phase 9) ==")
+    // Replicates the decode in Helpers/flowcode-watchdog/main.swift.
+    func decode(_ status: Int32) -> Int32 {
+        let termSig = status & 0x7f
+        if termSig == 0 { return (status >> 8) & 0xff }   // normal exit
+        if termSig != 0x7f { return 128 + termSig }       // killed by signal
+        return 0
+    }
+    // exit code 0 -> status 0x0000
+    checks.check(decode(0x0000) == 0, "normal exit 0 -> 0")
+    // exit code 42 -> status 0x2a00 (42 << 8)
+    checks.check(decode(42 << 8) == 42, "normal exit 42 -> 42")
+    // killed by SIGKILL(9) -> low 7 bits = 9 -> 128+9
+    checks.check(decode(9) == 137, "SIGKILL -> 137")
+    // killed by SIGTERM(15) -> 128+15
+    checks.check(decode(15) == 143, "SIGTERM -> 143")
+}
+
 // MARK: - entry
 
 wireChecks()
 await loopbackChecks()
 await metalChecks()
+swarmChecks()
+watchdogChecks()
 print(checks.failures == 0 ? "\nALL PASS" : "\n\(checks.failures) FAILURE(S)")
 exit(checks.failures == 0 ? 0 : 1)

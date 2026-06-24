@@ -16,6 +16,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let client = IPCClient()              // actor
     private var statusController: StatusItemController?
     private var hud: HUDController?
+    // §7 confirmation gate (default-OFF: inert until a confirm_request actually
+    // arrives over the socket, which only happens when the Python gate is enabled).
+    private var confirmGate: ConfirmGateController?
+    private let commitHotKeyHolder = HotKeyHolder()
+
+    // Phase 8 (swarm orchestration, DEFAULT OFF). The state is always present (cheap,
+    // inert; SwarmState.init does no IO and starts no work); the FSEvents observer is
+    // only created/started when swarmMode is on AND a Claude session has been resolved.
+    private let swarmState = SwarmState()
+    private var swarmObserver: SwarmObserver?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Request microphone access up front so the TCC grant is attributed to
@@ -40,6 +50,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hud = HUDController(store: store, settings: settings)
         self.hud = hud
         hud.start()
+
+        // §7 confirmation gate. The verdict travels back ONLY through this closure
+        // (-> ControlCommand.confirm); no voice path can reach it. Default-OFF: this
+        // wiring is inert until a confirm_request line arrives (only emitted when the
+        // Python VOICEMODE_CONFIRM_GATE is enabled), and the global commit hotkey is
+        // registered LAZILY on the first request — never at launch — so with the gate
+        // off nothing observable changes.
+        let gate = ConfirmGateController(
+            sendVerdict: { [weak self] id, verdict in
+                guard let self else { return }
+                Task { await self.client.send(.confirm(id: id, verdict: verdict.wireValue)) }
+            },
+            timeoutSeconds: 30.0
+        )
+        self.confirmGate = gate
+        // Fan-out from the single message consumer (NO second AsyncStream awaiter):
+        // VoiceSessionStore forwards confirm_request lines here.
+        store.onConfirmRequest = { [weak self] message in
+            guard let self, let id = message.id else { return }
+            // Lazily register the hands-on commit hotkey (Ctrl-Opt-Return) the first
+            // time the gate is actually used, so default-OFF registers no global hotkey.
+            self.commitHotKeyHolder.installIfNeeded { [weak gate] in gate?.hotkeyPressed() }
+            let req = ConfirmRequest(
+                id: id,
+                command: message.command ?? "",
+                risk: RiskTier(rawTolerant: message.risk))
+            self.confirmGate?.present(req)
+        }
+
+        // Swarm mode (Phase 8) is default-off; only arm observation when explicitly enabled.
+        startSwarmIfEnabled()
+    }
+
+    /// Start read-only swarm observation iff swarmMode is on. Inert otherwise.
+    ///
+    /// Honesty (plan §5/§8): we can only observe the file-tail truth, so we need an actual
+    /// `~/.claude/projects/<encoded>` dir + session id to watch. Resolving the *active*
+    /// session is a separate concern (a later wiring step / hook ping supplies it); until
+    /// then this method no-ops gracefully rather than guessing.
+    private func startSwarmIfEnabled() {
+        guard settings.swarmMode else { return }
+        guard let (projectDir, sessionId) = resolveActiveClaudeSession() else { return }
+        let observer = SwarmObserver(state: swarmState, encodedProjectDir: projectDir, sessionId: sessionId)
+        observer.start()
+        swarmObserver = observer
+        // Toggle the "ultracode: " transcript prepend in the core to match the menu setting.
+        Task { await client.send(.setUltracodePrefix(true)) }
+    }
+
+    /// Resolve the active Claude session to observe. Returns nil until a real resolution
+    /// mechanism is wired (deliberately conservative — we never fabricate a path).
+    private func resolveActiveClaudeSession() -> (projectDir: String, sessionId: String)? {
+        return nil
     }
 
     /// Start or stop a voice session based on the current session state.
@@ -47,6 +110,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggleSession() {
         let wantStop = store.sessionActive
         Task { await client.send(wantStop ? .stop : .start) }
+    }
+}
+
+// MARK: - Commit hotkey holder
+
+// Small @MainActor holder so AppDelegate can own a GlobalHotKey without exposing
+// Carbon types. installIfNeeded is idempotent and registers the global hotkey only on
+// first use (lazily), so with the §7 gate disabled NO global hotkey is ever registered.
+@MainActor
+final class HotKeyHolder {
+    private var hotKey: GlobalHotKey?
+    func installIfNeeded(_ onFire: @escaping @MainActor () -> Void) {
+        guard hotKey == nil else { return }
+        let hk = GlobalHotKey(onFire: onFire)
+        _ = hk.enable()
+        hotKey = hk
     }
 }
 

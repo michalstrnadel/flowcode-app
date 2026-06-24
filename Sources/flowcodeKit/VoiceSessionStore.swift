@@ -38,6 +38,12 @@ public final class VoiceSessionStore {
     private var messageTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
 
+    /// §7 fan-out: when set, every inbound `confirm_request` line is forwarded here
+    /// (instead of adding a SECOND consumer to the single-consumer messages stream).
+    /// AppDelegate wires this to ConfirmGateController.present(_:). Default nil =>
+    /// confirm_request lines are simply ignored (gate-disabled = no behaviour change).
+    public var onConfirmRequest: ((StatusMessage) -> Void)?
+
     // MARK: - Binding
 
     /// Begin consuming `client`'s message and connection streams on the main actor.
@@ -99,6 +105,12 @@ public final class VoiceSessionStore {
             default:
                 break
             }
+
+        case "confirm_request":
+            // §7: hand off to the confirmation gate (non-voice commit path). We do NOT
+            // mutate voice state here. If no handler is wired, the line is ignored.
+            onConfirmRequest?(message)
+            return
 
         default:
             // Unknown message types are tolerated; still honor any state field below.

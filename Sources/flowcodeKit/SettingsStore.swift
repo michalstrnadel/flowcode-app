@@ -25,6 +25,7 @@ public final class SettingsStore {
         static let semanticEndpointing = "flowcode.semanticEndpointing"
         static let launchAtLogin       = "flowcode.launchAtLogin"
         static let language            = "flowcode.language"
+        static let swarmMode           = "flowcode.swarmMode"
         static let socketPath          = "flowcode.socketPath"
     }
 
@@ -69,6 +70,14 @@ public final class SettingsStore {
         didSet { defaults.set(language, forKey: Keys.language) }
     }
 
+    /// Swarm / deep-orchestration mode (Phase 8, SECONDARY pillar, DEFAULT OFF). When on,
+    /// the app starts the read-only `SwarmObserver` and toggles the "ultracode: " transcript
+    /// prepend via `ControlCommand.setUltracodePrefix`. Off by default so a normal turn never
+    /// silently triggers a swarm.
+    public var swarmMode: Bool {
+        didSet { defaults.set(swarmMode, forKey: Keys.swarmMode) }
+    }
+
     // MARK: - Socket path
 
     /// Optional user override for the IPC socket path. When `nil`/empty the
@@ -111,6 +120,7 @@ public final class SettingsStore {
         self.bargeInEnabled      = defaults.bool(forKey: Keys.bargeInEnabled)
         self.semanticEndpointing = defaults.bool(forKey: Keys.semanticEndpointing)
         self.launchAtLogin       = defaults.bool(forKey: Keys.launchAtLogin)
+        self.swarmMode           = defaults.bool(forKey: Keys.swarmMode) // default false (missing key -> false)
 
         if defaults.object(forKey: Keys.streamingChunking) != nil {
             self.streamingChunking = defaults.bool(forKey: Keys.streamingChunking)

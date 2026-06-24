@@ -41,6 +41,10 @@ public struct StatusMessage: Decodable, Sendable {
     public let rms: Double?
     public let sessionId: String?    // JSON key "session_id"
     public let ts: String?
+    // §7 confirm_request fields (type == "confirm_request"); nil for other shapes.
+    public let id: String?           // request id to echo back in the verdict
+    public let command: String?      // verbatim, ALREADY-redacted command to display
+    public let risk: String?         // "none" | "confirm" | "elevated"
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -49,6 +53,9 @@ public struct StatusMessage: Decodable, Sendable {
         case rms
         case sessionId = "session_id"
         case ts
+        case id
+        case command
+        case risk
     }
 
     public init(from decoder: Decoder) throws {
@@ -62,6 +69,9 @@ public struct StatusMessage: Decodable, Sendable {
         self.rms = (try? container.decodeIfPresent(Double.self, forKey: .rms)) ?? nil
         self.sessionId = (try? container.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
         self.ts = (try? container.decodeIfPresent(String.self, forKey: .ts)) ?? nil
+        self.id = (try? container.decodeIfPresent(String.self, forKey: .id)) ?? nil
+        self.command = (try? container.decodeIfPresent(String.self, forKey: .command)) ?? nil
+        self.risk = (try? container.decodeIfPresent(String.self, forKey: .risk)) ?? nil
 
         // Decode "state" as a raw string first, then map to the enum. An unknown string
         // (or any decode failure) yields nil so the caller leaves the current state unchanged.
@@ -79,7 +89,10 @@ public struct StatusMessage: Decodable, Sendable {
         state: VoiceState? = nil,
         rms: Double? = nil,
         sessionId: String? = nil,
-        ts: String? = nil
+        ts: String? = nil,
+        id: String? = nil,
+        command: String? = nil,
+        risk: String? = nil
     ) {
         self.type = type
         self.eventType = eventType
@@ -87,6 +100,9 @@ public struct StatusMessage: Decodable, Sendable {
         self.rms = rms
         self.sessionId = sessionId
         self.ts = ts
+        self.id = id
+        self.command = command
+        self.risk = risk
     }
 }
 
@@ -104,6 +120,20 @@ public enum ControlCommand: Sendable {
     case stop
     case setFlag(key: String, value: String)
     case confirm(id: String, verdict: String)
+
+    // MARK: Swarm / "ultracode" deep mode (Phase 8, default OFF)
+
+    /// Flag key the Python core reads to decide whether to prepend the "ultracode: "
+    /// trigger to the next transcript before it reaches Claude Code. Toggling swarm mode
+    /// (menu-bar "Swarm/Deep mode") or saying a spoken alias ("swarm this" / "go deep")
+    /// all map to setting this same flag — text injection is the control ceiling (plan §8).
+    public static let ultracodeFlagKey = "VOICEMODE_ULTRACODE_PREFIX"
+
+    /// Convenience: the control command that turns the "ultracode: " transcript prepend on
+    /// or off. Equivalent to `.setFlag(key: ControlCommand.ultracodeFlagKey, value: ...)`.
+    public static func setUltracodePrefix(_ enabled: Bool) -> ControlCommand {
+        .setFlag(key: ultracodeFlagKey, value: enabled ? "true" : "false")
+    }
 
     /// Stable key ordering for the encoded JSON. JSONEncoder emits keys in the order
     /// declared here, keeping output deterministic and matching the documented contract.

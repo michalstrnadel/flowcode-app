@@ -95,22 +95,23 @@ public final class MicLevelTap {
         // avoids an implicit format converter.
         let format = input.outputFormat(forBus: 0)
 
-        // The tap block runs on the audio render thread (nonisolated). It must not capture
-        // `self`'s actor-isolated members directly; it only touches the Sendable smoother
-        // box and then hops to the MainActor to publish.
+        // The tap block runs on AVFAudio's REAL-TIME audio thread, not the main actor.
+        // It MUST be an explicitly @Sendable (non-isolated) closure: start() is @MainActor,
+        // so an un-annotated closure literal inherits main-actor isolation and Swift 6
+        // inserts a runtime executor check that FAILS (dispatch_assert_queue -> SIGTRAP)
+        // when AVFAudio invokes it off-main. Typing the block @Sendable strips the
+        // isolation. It captures only the Sendable smoother + a weak self, computes the
+        // level on the audio thread, then hops to the MainActor to publish.
         let smoother = self.smoother
-        input.installTap(onBus: 0, bufferSize: Self.bufferFrames, format: format) { buffer, _ in
-            // Compute + smooth on the audio thread; cheap (vDSP) and avoids actor hops for
-            // buffers that produce no observable change is unnecessary — we always publish.
+        let tapBlock: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { [weak self] buffer, _ in
             let smoothed = MicLevelTap.process(buffer: buffer, with: smoother)
-
-            // Publish on the MainActor. A detached-style hop keeps the audio thread free.
-            Task { @MainActor [weak self] in
+            Task { @MainActor in
                 guard let self, self.isRunning else { return }
                 self.level = smoothed
                 self.onLevel?(smoothed)
             }
         }
+        input.installTap(onBus: 0, bufferSize: Self.bufferFrames, format: format, block: tapBlock)
 
         // Prepare + start. On failure, remove the tap and rethrow with clean state.
         engine.prepare()

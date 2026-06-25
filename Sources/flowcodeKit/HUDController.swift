@@ -30,9 +30,17 @@ public final class HUDController {
     private let earcons = Earcons()
 
     private var lastElapsed: Double = 0
-    private var lastState: VoiceState = .idle
     private var lastSessionActive = false
     private var micRunning = false
+
+    // Live-signal orb inference (the core's per-state events aren't broadcast when
+    // converse runs outside the MCP server, so we derive the orb state from the
+    // amplitude stream + native mic + barge-in instead of store.state).
+    private var lastSpeakTime: Double = -10
+    private var lastMicTime: Double = -10
+    private var bargeInFlashUntil: Double = 0
+    private var lastBargeInTick: Int = 0
+    private var lastInferred: VoiceState = .idle
 
     public init(store: VoiceSessionStore, settings: SettingsStore) {
         self.store = store
@@ -84,16 +92,34 @@ public final class HUDController {
         lastElapsed = elapsed
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
-        // Live amplitude: mic while listening, assistant TTS level while speaking, else silent.
-        let rawAmp: Float
+        // Drive the orb from LIVE signals rather than store.state: assistant speaking =
+        // the TTS amplitude stream (store.lastRMS), user talking = the native mic, cut =
+        // the barge-in tick. Each state is held briefly so word-gaps don't flicker it.
         let socketRMS = Float(min(1.0, max(0.0, store.lastRMS)))
-        switch store.state {
-        // Listening reacts to the user's mic; fall back to any socket-provided level so the
-        // orb still shows life if mic access was denied (and so a headless driver can demo it).
-        case .listening: rawAmp = max(micRunning ? mic.level : 0, socketRMS)
-        case .speaking:  rawAmp = socketRMS
-        default:         rawAmp = 0
+        let micLevel: Float = micRunning ? mic.level : 0
+        if socketRMS > 0.05 { lastSpeakTime = elapsed }
+        if micLevel  > 0.08 { lastMicTime   = elapsed }
+
+        if store.bargeInTick != lastBargeInTick {
+            lastBargeInTick = store.bargeInTick
+            bargeInFlashUntil = elapsed + 0.9     // flash the cut for ~0.9s
+            earcons.play(.interrupted)
         }
+
+        let speaking    = (elapsed - lastSpeakTime) < 0.5
+        let listening   = !speaking && (elapsed - lastMicTime) < 0.7
+        let interrupted = elapsed < bargeInFlashUntil
+        let inferred: VoiceState = interrupted ? .interrupted
+            : speaking ? .speaking
+            : listening ? .listening : .idle
+
+        if inferred != lastInferred {
+            if inferred == .listening { earcons.play(.startListening) }
+            orbState.setState(inferred)
+            lastInferred = inferred
+        }
+
+        let rawAmp: Float = speaking ? socketRMS : (listening ? micLevel : 0)
         orbState.amplitude = rawAmp        // smoothed internally by OrbState
         orbState.step(dt: dt)              // lerp visual params toward target
 
@@ -129,22 +155,8 @@ public final class HUDController {
     }
 
     private func handleStoreChange() {
-        let newState = store.state
-        if newState != lastState {
-            orbState.setState(newState)
-            switch newState {
-            case .listening:
-                earcons.play(.startListening)
-            case .interrupted:
-                earcons.play(.interrupted)
-            case .idle where lastState == .speaking:
-                earcons.play(.endTurn)
-            default:
-                break
-            }
-            lastState = newState
-        }
-
+        // The orb's visual state + earcons are inferred from live signals in
+        // makeUniforms(); here we only react to session lifecycle (show/hide panel).
         if store.sessionActive != lastSessionActive {
             lastSessionActive = store.sessionActive
             syncVisibility()

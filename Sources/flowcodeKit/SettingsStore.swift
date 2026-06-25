@@ -127,10 +127,18 @@ public final class SettingsStore {
         // for missing keys, which is the desired default for all but
         // `streamingChunking` (default true) — handle that one via object
         // presence so a user who turns it off has the choice respected.
-        self.bargeInEnabled      = defaults.bool(forKey: Keys.bargeInEnabled)
         self.semanticEndpointing = defaults.bool(forKey: Keys.semanticEndpointing)
         self.launchAtLogin       = defaults.bool(forKey: Keys.launchAtLogin)
         self.swarmMode           = defaults.bool(forKey: Keys.swarmMode) // default false (missing key -> false)
+
+        // Barge-in is the whole point of flowcode, so default it ON (respect an
+        // explicit user choice once they've toggled it). Same object-presence
+        // pattern as streamingChunking below.
+        if defaults.object(forKey: Keys.bargeInEnabled) != nil {
+            self.bargeInEnabled = defaults.bool(forKey: Keys.bargeInEnabled)
+        } else {
+            self.bargeInEnabled = true
+        }
 
         if defaults.object(forKey: Keys.streamingChunking) != nil {
             self.streamingChunking = defaults.bool(forKey: Keys.streamingChunking)

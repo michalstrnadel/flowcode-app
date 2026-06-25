@@ -30,7 +30,10 @@ os.environ["VOICEMODE_STATUS_SOCKET"] = SOCK
 # Flags START OFF — the menu toggles drive them via set_flag. Only non-flag demo
 # defaults are pre-seeded here.
 os.environ.setdefault("VOICEMODE_WHISPER_LANGUAGE", "en")
-os.environ.setdefault("VOICEMODE_BARGEIN_ENERGY_GATE", "0.04")
+# Barge-in sensitivity: low gate + few onset frames so "stop" cuts easily. Works
+# cleanly on HEADPHONES (no TTS bleed); on speakers it may self-trigger.
+os.environ.setdefault("VOICEMODE_BARGEIN_ENERGY_GATE", "0.03")
+os.environ.setdefault("VOICEMODE_BARGEIN_ONSET_FRAMES", "3")
 
 from voice_mode import config  # noqa: E402
 from voice_mode.utils.status_broadcaster import (  # noqa: E402

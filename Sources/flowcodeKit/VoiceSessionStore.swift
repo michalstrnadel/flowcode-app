@@ -30,6 +30,11 @@ public final class VoiceSessionStore {
     /// Most recent assistant-TTS amplitude (RMS), 0...~1. Phase 4 telemetry.
     public var lastRMS: Double = 0
 
+    /// Monotonic counter bumped on every inbound `barge_in`. The HUD watches it to
+    /// flash the interrupted state — independent of the core's (unreliable when
+    /// converse runs outside the MCP server) state events.
+    public var bargeInTick: Int = 0
+
     // MARK: - Lifecycle
 
     public init() {}
@@ -90,8 +95,10 @@ public final class VoiceSessionStore {
             }
 
         case "barge_in":
-            // Out-of-band interrupt notification. Tolerated; nothing to mutate here.
-            break
+            // Out-of-band interrupt notification. Bump the tick so the HUD can flash
+            // the interrupted state (the core's INTERRUPTED event isn't broadcast when
+            // converse runs outside the MCP server, so this is the reliable signal).
+            bargeInTick &+= 1
 
         case "event":
             // Session lifecycle events arrive via event_type.

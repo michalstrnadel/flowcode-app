@@ -204,16 +204,47 @@ public final class StatusItemController {
     /// the header label and the Start/Stop title.
     private func renderMenuDynamicParts() {
         let info = presentation(for: store.state)
-        let connectivity = store.connected ? "Connected" : "Disconnected"
+
+        if settings.readAloudEnabled {
+            // ---- Model B: flowcode is the voice of Claude Code ----
+            let speaking = store.state == .speaking
+            headerItem.title = "\(info.fallback)  \(speaking ? "Speaking" : "Idle") • Claude Code voice"
+            toggleSessionItem.isEnabled = speaking
+            toggleSessionItem.title = speaking ? "Stop Speaking" : "Listening to Claude Code…"
+            bargeInItem.state = settings.bargeInEnabled ? .on : .off
+            streamingItem.state = settings.streamingChunking ? .on : .off
+            semanticItem.state = settings.semanticEndpointing ? .on : .off
+            launchAtLoginItem.state = settings.launchAtLogin ? .on : .off
+            return
+        }
+
+        // In HUD-only mode the "core" is Claude Code's voicemode MCP, which only
+        // exists while a `claude` session is running — so "disconnected" is the
+        // normal waiting state, not an error. Word it that way.
+        let connectivity: String
+        if store.connected {
+            connectivity = "Connected"
+        } else {
+            connectivity = settings.hudOnlyMode ? "Waiting for Claude Code…" : "Disconnected"
+        }
         // Lead the header with the state glyph for an at-a-glance read.
         headerItem.title = "\(info.fallback)  \(info.label) • \(connectivity)"
 
-        // Start/Stop needs a live core: grey it out (and say why) when disconnected,
-        // so the menu never offers an action that can't reach the voice core.
-        toggleSessionItem.isEnabled = store.connected
-        toggleSessionItem.title = store.connected
-            ? (store.sessionActive ? "Stop Voice" : "Start Voice")
-            : "Start Voice (core offline)"
+        if settings.hudOnlyMode {
+            // The app doesn't start sessions in HUD-only mode — Claude Code drives
+            // converse(). Make the entry an informational, non-clickable hint.
+            toggleSessionItem.isEnabled = false
+            toggleSessionItem.title = store.connected
+                ? "Voice runs in Claude Code"
+                : "Run `claude` to connect"
+        } else {
+            // Self-managed core: Start/Stop needs a live core, so grey it out (and
+            // say why) when disconnected — never offer an action that can't land.
+            toggleSessionItem.isEnabled = store.connected
+            toggleSessionItem.title = store.connected
+                ? (store.sessionActive ? "Stop Voice" : "Start Voice")
+                : "Start Voice (core offline)"
+        }
 
         // Checkmarks reflect persisted settings. The feature toggles stay ENABLED even
         // when disconnected — a change persists and is resynced to the core on connect.

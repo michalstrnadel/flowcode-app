@@ -92,26 +92,38 @@ public final class HUDController {
         lastElapsed = elapsed
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
-        // Drive the orb from LIVE signals rather than store.state: assistant speaking =
-        // the TTS amplitude stream (store.lastRMS), user talking = the native mic, cut =
-        // the barge-in tick. Each state is held briefly so word-gaps don't flicker it.
-        let socketRMS = Float(min(1.0, max(0.0, store.lastRMS)))
-        let micLevel: Float = micRunning ? mic.level : 0
-        if socketRMS > 0.05 { lastSpeakTime = elapsed }
-        if micLevel  > 0.08 { lastMicTime   = elapsed }
+        let inferred: VoiceState
+        let rawAmp: Float
 
-        if store.bargeInTick != lastBargeInTick {
-            lastBargeInTick = store.bargeInTick
-            bargeInFlashUntil = elapsed + 0.9     // flash the cut for ~0.9s
-            earcons.play(.interrupted)
+        if settings.readAloudEnabled {
+            // Model B: the local controllers set store.state + store.lastRMS authoritatively
+            // (read-aloud → speaking, dictation → listening). Trust them directly.
+            inferred = store.state
+            let amp = Float(min(1.0, max(0.0, store.lastRMS)))
+            rawAmp = (store.state == .speaking || store.state == .listening) ? amp : 0
+        } else {
+            // Socket path: the core's per-state events aren't always broadcast, so derive
+            // the orb state from live signals — assistant speaking = the TTS amplitude
+            // stream (store.lastRMS), user talking = the native mic, cut = the barge-in tick.
+            let socketRMS = Float(min(1.0, max(0.0, store.lastRMS)))
+            let micLevel: Float = micRunning ? mic.level : 0
+            if socketRMS > 0.05 { lastSpeakTime = elapsed }
+            if micLevel  > 0.08 { lastMicTime   = elapsed }
+
+            if store.bargeInTick != lastBargeInTick {
+                lastBargeInTick = store.bargeInTick
+                bargeInFlashUntil = elapsed + 0.9     // flash the cut for ~0.9s
+                earcons.play(.interrupted)
+            }
+
+            let speaking    = (elapsed - lastSpeakTime) < 0.5
+            let listening   = !speaking && (elapsed - lastMicTime) < 0.7
+            let interrupted = elapsed < bargeInFlashUntil
+            inferred = interrupted ? .interrupted
+                : speaking ? .speaking
+                : listening ? .listening : .idle
+            rawAmp = speaking ? socketRMS : (listening ? micLevel : 0)
         }
-
-        let speaking    = (elapsed - lastSpeakTime) < 0.5
-        let listening   = !speaking && (elapsed - lastMicTime) < 0.7
-        let interrupted = elapsed < bargeInFlashUntil
-        let inferred: VoiceState = interrupted ? .interrupted
-            : speaking ? .speaking
-            : listening ? .listening : .idle
 
         if inferred != lastInferred {
             if inferred == .listening { earcons.play(.startListening) }
@@ -119,7 +131,6 @@ public final class HUDController {
             lastInferred = inferred
         }
 
-        let rawAmp: Float = speaking ? socketRMS : (listening ? micLevel : 0)
         orbState.amplitude = rawAmp        // smoothed internally by OrbState
         orbState.step(dt: dt)              // lerp visual params toward target
 

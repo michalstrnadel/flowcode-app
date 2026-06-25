@@ -18,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hud: HUDController?
     // Spawns + supervises the Python voice core as a direct child (mic TCC + no orphans).
     private var coreSupervisor: CoreSupervisor?
+    // Model B: self-contained voice layer (reads Claude Code's transcript aloud). When
+    // active, the socket/core path above is skipped entirely.
+    private var localVoice: LocalVoiceController?
     // §7 confirmation gate (default-OFF: inert until a confirm_request actually
     // arrives over the socket, which only happens when the Python gate is enabled).
     private var confirmGate: ConfirmGateController?
@@ -30,32 +33,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var swarmObserver: SwarmObserver?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Request microphone access up front so the TCC grant is attributed to
-        // flowcode (the responsible process), not to a child or to the terminal.
-        Task { _ = await MicPermission.ensureAccess() }
+        if settings.readAloudEnabled {
+            // ---- Model B: self-contained voice layer over Claude Code ----
+            // flowcode tails the live session transcript and reads each new assistant
+            // message aloud (Kokoro), driving the orb. NO socket, NO Python core, and
+            // NO microphone (read-aloud doesn't capture) — so no mic prompt either.
+            let lv = LocalVoiceController(store: store)
+            lv.start()
+            self.localVoice = lv
+        } else {
+            // ---- Socket path: external voice core (voicemode MCP or spawned runner) ----
+            // Request microphone access up front so the TCC grant attributes to flowcode.
+            Task { _ = await MicPermission.ensureAccess() }
 
-        // Spawn the Python voice core as our direct child BEFORE connecting, so the
-        // socket comes up promptly and the mic TCC grant attributes to flowcode.app.
-        // No-op if the core is already running or its binaries are missing.
-        let socketPath = settings.socketPath
-        let supervisor = CoreSupervisor(socketPath: socketPath)
-        supervisor.start()
-        self.coreSupervisor = supervisor
+            let socketPath = settings.socketPath
+            let supervisor = CoreSupervisor(socketPath: socketPath, hudOnly: settings.hudOnlyMode)
+            supervisor.start()
+            self.coreSupervisor = supervisor
 
-        // Project the voice core's live state into the observable store, then start
-        // connecting to the status socket (auto-reconnects with backoff).
-        store.bind(to: client)
-        Task { await client.connect(socketPath: socketPath) }
+            // Project the voice core's live state into the observable store, then start
+            // connecting to the status socket (auto-reconnects with backoff).
+            store.bind(to: client)
+            Task { await client.connect(socketPath: socketPath) }
 
-        // Push the menu's current flag state to the core whenever we (re)connect, so
-        // the live core always matches the menu — even after a core restart.
-        observeConnection()
+            // Push the menu's current flag state to the core whenever we (re)connect.
+            observeConnection()
+        }
 
         // Build the menu-bar UI.
         statusController = StatusItemController(
             store: store,
             settings: settings,
-            onToggleSession: { [weak self] in self?.toggleSession() },
+            onToggleSession: { [weak self] in
+                guard let self else { return }
+                // In Model B the toggle is "Stop Speaking" (flush the read-aloud queue);
+                // on the socket path it starts/stops a converse session.
+                if self.settings.readAloudEnabled { self.localVoice?.flush() }
+                else { self.toggleSession() }
+            },
             onQuit: { NSApp.terminate(nil) },
             onSetFlag: { [weak self] key, enabled in
                 guard let self else { return }
@@ -104,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// its parent-death watchdog).
     func applicationWillTerminate(_ notification: Notification) {
         coreSupervisor?.stop()
+        localVoice?.stop()
     }
 
     /// Start read-only swarm observation iff swarmMode is on. Inert otherwise.

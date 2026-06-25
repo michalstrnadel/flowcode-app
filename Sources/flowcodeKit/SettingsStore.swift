@@ -26,6 +26,8 @@ public final class SettingsStore {
         static let launchAtLogin       = "flowcode.launchAtLogin"
         static let language            = "flowcode.language"
         static let swarmMode           = "flowcode.swarmMode"
+        static let hudOnlyMode         = "flowcode.hudOnlyMode"
+        static let readAloud           = "flowcode.readAloud"
         static let socketPath          = "flowcode.socketPath"
     }
 
@@ -88,6 +90,25 @@ public final class SettingsStore {
         didSet { defaults.set(swarmMode, forKey: Keys.swarmMode) }
     }
 
+    /// HUD-only mode (DEFAULT OFF). When on, the app does NOT spawn/supervise its own
+    /// voice core — it runs purely as the HUD + menu, connecting to a core that something
+    /// else owns (e.g. the voicemode MCP server hosted inside Claude Code, which binds the
+    /// status socket). This is the "real voice-coding with Claude Code" setup: Claude Code's
+    /// voicemode is the sole core, and flowcode never competes for the socket. (CoreSupervisor
+    /// ALSO auto-detects a live core on the socket and skips spawning, so coexistence works
+    /// regardless of launch order even with this off; this flag makes it deterministic.)
+    public var hudOnlyMode: Bool {
+        didSet { defaults.set(hudOnlyMode, forKey: Keys.hudOnlyMode) }
+    }
+
+    /// Model B (DEFAULT ON): run as a self-contained voice layer over Claude Code —
+    /// flowcode tails the live session transcript and reads each new assistant message
+    /// aloud (Kokoro), driving the orb, with NO socket / voicemode / Python core. When
+    /// on, the socket path (CoreSupervisor + IPC) is skipped entirely.
+    public var readAloudEnabled: Bool {
+        didSet { defaults.set(readAloudEnabled, forKey: Keys.readAloud) }
+    }
+
     // MARK: - Socket path
 
     /// Optional user override for the IPC socket path. When `nil`/empty the
@@ -130,6 +151,15 @@ public final class SettingsStore {
         self.semanticEndpointing = defaults.bool(forKey: Keys.semanticEndpointing)
         self.launchAtLogin       = defaults.bool(forKey: Keys.launchAtLogin)
         self.swarmMode           = defaults.bool(forKey: Keys.swarmMode) // default false (missing key -> false)
+        self.hudOnlyMode         = defaults.bool(forKey: Keys.hudOnlyMode) // default false (missing key -> false)
+
+        // Model B (read-aloud) is the default experience. Object-presence pattern so a
+        // user who turns it off keeps that choice.
+        if defaults.object(forKey: Keys.readAloud) != nil {
+            self.readAloudEnabled = defaults.bool(forKey: Keys.readAloud)
+        } else {
+            self.readAloudEnabled = true
+        }
 
         // Barge-in is the whole point of flowcode, so default it ON (respect an
         // explicit user choice once they've toggled it). Same object-presence

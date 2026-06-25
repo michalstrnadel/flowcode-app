@@ -79,6 +79,15 @@ public final class VoiceSessionStore {
             for await isConnected in client.connectionState {
                 guard let self else { return }
                 self.connected = isConnected
+                // Losing the core (it crashed, or Claude Code quit) means there is
+                // no live session anymore. Clear it so the orb panel hides instead
+                // of staying stuck — SESSION_END may never arrive if the core died
+                // mid-turn. On reconnect, the broadcaster replays an active
+                // SESSION_START (sticky) so a still-running session re-appears.
+                if !isConnected {
+                    self.sessionActive = false
+                    self.state = .idle
+                }
             }
         }
     }

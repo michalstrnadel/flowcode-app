@@ -162,7 +162,16 @@ class Runner:
     async def _real_turns(self):
         from voice_mode.tools.converse import converse
         conv = getattr(converse, "fn", converse)
-        prompts = ["I'm listening.", "Go ahead.", "Okay, what else?"]
+        # First turn is a long monologue so 'Start Voice' gives a generous window to
+        # barge in (say "stop" loudly); later turns are short conversational acks.
+        intro = (
+            "Okay, here is the plan, and I am going to keep talking for a while so you "
+            "can interrupt me whenever you like. First I will set everything up, then I "
+            "will run the tests one by one, and after that I will walk through every "
+            "single result slowly and carefully, so please just go right ahead and say "
+            "stop at any moment to cut me off and I will switch to listening instantly."
+        )
+        prompts = [intro, "Go ahead, I'm listening.", "Okay, what else?"]
         for i in itertools.count():
             await conv(message=prompts[i % len(prompts)], wait_for_response=True,
                        tts_provider="kokoro", voice="af_sky",

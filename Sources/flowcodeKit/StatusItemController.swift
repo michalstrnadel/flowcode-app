@@ -3,10 +3,18 @@ import Observation
 
 /// Owns the menu-bar `NSStatusItem` and its dropdown menu.
 ///
-/// The controller renders the status button glyph/title from `store.state` and
-/// rebuilds the menu header (state + connected) reactively. It uses Observation's
-/// `withObservationTracking` to re-arm a render whenever any observed property it
-/// reads (`store.state`, `store.connected`, `store.sessionActive`) changes.
+/// The menu has two shapes, chosen ONCE at init by `settings.readAloudEnabled` (the mode
+/// is fixed for the process lifetime — `main.swift` branches the same way at launch):
+///
+///  - **Model B (read-aloud, the shipping default):** a clean menu for "flowcode is the
+///    voice of Claude Code" — Pause/Resume, Stop Speaking, the voice picker, a dictation
+///    hint, Launch at Login, Open Log. The barge-in/streaming/semantic flags are NOT shown
+///    here: they only configure the Python voice core, which Model B never runs.
+///  - **Socket path (experimental):** the original menu with the three `VOICEMODE_*` flag
+///    toggles that drive a live voice core over the control socket.
+///
+/// The controller renders the status button glyph/title from `store.state` and rebuilds the
+/// dynamic parts reactively via Observation's `withObservationTracking`.
 ///
 /// All work touches AppKit, so the whole class is `@MainActor`.
 @MainActor
@@ -19,31 +27,61 @@ public final class StatusItemController {
     private let onToggleSession: () -> Void
     private let onQuit: () -> Void
     /// Push a voice-core flag change to the Python core (key = VOICEMODE_* env name).
-    /// Default no-op keeps the controller usable in isolation / tests.
+    /// Only used on the socket path; default no-op keeps the controller usable in isolation.
     private let onSetFlag: (_ key: String, _ enabled: Bool) -> Void
+    /// Model B: pause/resume the voice layer (keep the app running).
+    private let onTogglePause: () -> Void
+    /// Open the audit/log file in Finder.
+    private let onOpenLog: () -> Void
+    /// Model B: pick the Kokoro read-aloud voice.
+    private let onSetVoice: (_ voice: String) -> Void
 
     // MARK: AppKit objects
 
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
 
-    // Header line at the top of the menu (state + connectivity). Disabled so it
-    // reads as a label rather than a clickable item.
+    // Header line at the top of the menu (state + connectivity / what it's doing).
+    // Disabled so it reads as a label rather than a clickable item.
     private let headerItem = NSMenuItem()
 
-    // Start/Stop entry whose title flips with `store.sessionActive`.
+    // Shared: Start/Stop session (socket) — and, in Model B, "Stop Speaking".
     private let toggleSessionItem = NSMenuItem()
 
-    // Settings toggles. Kept as references so their checkmark state can be
-    // refreshed when the underlying setting changes (e.g. via launch-at-login).
+    // Model B items.
+    private let pauseItem = NSMenuItem()
+    private let readAloudItem = NSMenuItem()
+    private let voiceParentItem = NSMenuItem()
+    private var voiceItems: [String: NSMenuItem] = [:]
+    private let dictationHintItem = NSMenuItem()
+    private let openLogItem = NSMenuItem()
+
+    // Socket-path settings toggles (experimental voice core).
     private let bargeInItem = NSMenuItem()
     private let streamingItem = NSMenuItem()
     private let semanticItem = NSMenuItem()
+
+    // Shared: login item.
     private let launchAtLoginItem = NSMenuItem()
 
-    // Bridges target/action selectors to Swift closures so the controller can
-    // stay a plain final class without exposing @objc methods itself.
+    // Bridges target/action selectors to Swift closures so the controller can stay a plain
+    // final class without exposing @objc methods itself.
     private let coordinator = ActionCoordinator()
+
+    /// Curated Kokoro voices offered in the Model B voice picker.
+    private struct VoiceOption { let id: String; let label: String }
+    private static let voiceOptions: [VoiceOption] = [
+        .init(id: "af_sky",      label: "Sky — US, female"),
+        .init(id: "af_bella",    label: "Bella — US, female"),
+        .init(id: "af_nicole",   label: "Nicole — US, female"),
+        .init(id: "af_sarah",    label: "Sarah — US, female"),
+        .init(id: "am_adam",     label: "Adam — US, male"),
+        .init(id: "am_michael",  label: "Michael — US, male"),
+        .init(id: "bf_emma",     label: "Emma — UK, female"),
+        .init(id: "bf_isabella", label: "Isabella — UK, female"),
+        .init(id: "bm_george",   label: "George — UK, male"),
+        .init(id: "bm_lewis",    label: "Lewis — UK, male"),
+    ]
 
     // MARK: Init
 
@@ -51,12 +89,18 @@ public final class StatusItemController {
                 settings: SettingsStore,
                 onToggleSession: @escaping () -> Void,
                 onQuit: @escaping () -> Void,
-                onSetFlag: @escaping (_ key: String, _ enabled: Bool) -> Void = { _, _ in }) {
+                onSetFlag: @escaping (_ key: String, _ enabled: Bool) -> Void = { _, _ in },
+                onTogglePause: @escaping () -> Void = {},
+                onOpenLog: @escaping () -> Void = {},
+                onSetVoice: @escaping (_ voice: String) -> Void = { _ in }) {
         self.store = store
         self.settings = settings
         self.onToggleSession = onToggleSession
         self.onQuit = onQuit
         self.onSetFlag = onSetFlag
+        self.onTogglePause = onTogglePause
+        self.onOpenLog = onOpenLog
+        self.onSetVoice = onSetVoice
 
         // Variable-length item so the glyph/title can size naturally.
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -80,27 +124,96 @@ public final class StatusItemController {
 
     private func buildMenu() {
         menu.autoenablesItems = false
+        if settings.readAloudEnabled {
+            buildReadAloudMenu()
+        } else {
+            buildSocketMenu()
+        }
+    }
 
-        // Header (state + connected). Non-interactive.
+    /// Model B menu: the shipping "voice of Claude Code" experience.
+    private func buildReadAloudMenu() {
         headerItem.isEnabled = false
         menu.addItem(headerItem)
 
         menu.addItem(.separator())
 
-        // Start / Stop Voice.
-        toggleSessionItem.target = coordinator
-        toggleSessionItem.action = #selector(ActionCoordinator.invoke(_:))
-        coordinator.bind(toggleSessionItem) { [weak self] in
-            self?.onToggleSession()
-        }
+        // Pause / Resume the whole voice layer (keeps the app running).
+        bind(pauseItem, key: "p") { [weak self] in self?.onTogglePause() }
+        menu.addItem(pauseItem)
+
+        // Stop the current utterance now (reuses the session-toggle closure, which maps
+        // to LocalVoiceController.flush() in main.swift). Enabled only while speaking.
+        toggleSessionItem.title = "Stop Speaking"
+        bind(toggleSessionItem) { [weak self] in self?.onToggleSession() }
         menu.addItem(toggleSessionItem)
 
         menu.addItem(.separator())
 
-        // Settings toggles. Each flips its bound Bool, refreshes its checkmark, and —
-        // for the three voice-core flags — pushes the change to the live core via
-        // `onSetFlag` (keyed by the VOICEMODE_* env name). Launch-at-Login is a local
-        // login item with no core flag, so it passes no key.
+        // Read messages aloud (persisted). Switching modes needs a relaunch — say so.
+        configureToggle(readAloudItem,
+                        title: "Read messages aloud",
+                        flagKey: nil,
+                        get: { [weak self] in self?.settings.readAloudEnabled ?? true },
+                        set: { [weak self] new in self?.settings.readAloudEnabled = new })
+        readAloudItem.toolTip = "Takes effect after relaunch"
+        menu.addItem(readAloudItem)
+
+        // Voice picker submenu.
+        voiceParentItem.title = "Voice"
+        let voiceMenu = NSMenu()
+        for opt in Self.voiceOptions {
+            let item = NSMenuItem()
+            item.title = opt.label
+            let id = opt.id
+            bind(item) { [weak self] in
+                guard let self else { return }
+                self.settings.voice = id
+                self.onSetVoice(id)
+                self.refreshVoiceChecks()
+            }
+            voiceMenu.addItem(item)
+            voiceItems[id] = item
+        }
+        voiceParentItem.submenu = voiceMenu
+        menu.addItem(voiceParentItem)
+
+        // Non-clickable hint for push-to-talk dictation.
+        dictationHintItem.title = "Hold Right Option (⌥) to dictate"
+        dictationHintItem.isEnabled = false
+        menu.addItem(dictationHintItem)
+
+        menu.addItem(.separator())
+
+        configureToggle(launchAtLoginItem,
+                        title: "Launch at Login",
+                        flagKey: nil,
+                        get: { [weak self] in self?.settings.launchAtLogin ?? false },
+                        set: { [weak self] new in self?.settings.launchAtLogin = new })
+        menu.addItem(launchAtLoginItem)
+
+        openLogItem.title = "Open Log…"
+        bind(openLogItem) { [weak self] in self?.onOpenLog() }
+        menu.addItem(openLogItem)
+
+        menu.addItem(.separator())
+
+        addQuitItem()
+    }
+
+    /// Socket-path menu (experimental voice core): the original layout with the three
+    /// `VOICEMODE_*` flag toggles. Kept identical to the pre-Model-B menu.
+    private func buildSocketMenu() {
+        headerItem.isEnabled = false
+        menu.addItem(headerItem)
+
+        menu.addItem(.separator())
+
+        bind(toggleSessionItem) { [weak self] in self?.onToggleSession() }
+        menu.addItem(toggleSessionItem)
+
+        menu.addItem(.separator())
+
         configureToggle(bargeInItem,
                         title: "Barge-In Enabled",
                         flagKey: SettingsStore.bargeInFlagKey,
@@ -131,14 +244,21 @@ public final class StatusItemController {
 
         menu.addItem(.separator())
 
-        // Quit.
+        addQuitItem()
+    }
+
+    private func addQuitItem() {
         let quitItem = NSMenuItem(title: "Quit flowcode", action: nil, keyEquivalent: "q")
-        quitItem.target = coordinator
-        quitItem.action = #selector(ActionCoordinator.invoke(_:))
-        coordinator.bind(quitItem) { [weak self] in
-            self?.onQuit()
-        }
+        bind(quitItem) { [weak self] in self?.onQuit() }
         menu.addItem(quitItem)
+    }
+
+    /// Bind a plain (non-toggle) item to a closure, optionally with a key equivalent.
+    private func bind(_ item: NSMenuItem, key: String = "", _ handler: @escaping () -> Void) {
+        item.target = coordinator
+        item.action = #selector(ActionCoordinator.invoke(_:))
+        if !key.isEmpty { item.keyEquivalent = key }
+        coordinator.bind(item, handler)
     }
 
     /// Wires a checkmark toggle item to a getter/setter pair on `settings`. When
@@ -182,98 +302,125 @@ public final class StatusItemController {
     /// Updates the status-bar button's image (or title fallback) for the current state.
     private func renderButton() {
         guard let button = statusItem.button else { return }
-        let info = presentation(for: store.state)
 
-        if let image = NSImage(systemSymbolName: info.symbol, accessibilityDescription: info.label) {
+        // Paused (Model B) gets its own glyph so the menu bar shows the app is muted.
+        let paused = settings.readAloudEnabled && store.paused
+        let symbol = paused ? "pause.circle" : presentation(for: store.state).symbol
+        let fallback = paused ? "❙❙" : presentation(for: store.state).fallback
+        let label = paused ? "Paused" : presentation(for: store.state).label
+
+        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: label) {
             image.isTemplate = true // adopt the menu-bar tint (light/dark aware)
             button.image = image
             button.title = ""
             button.imagePosition = .imageOnly
         } else {
-            // Fallback for environments lacking the SF Symbol.
             button.image = nil
-            button.title = info.fallback
+            button.title = fallback
             button.imagePosition = .noImage
         }
 
-        // Accessibility / tooltip surface for the current state + connectivity.
-        button.toolTip = "flowcode — \(info.label)\(store.connected ? "" : " (disconnected)")"
+        button.toolTip = "flowcode — \(label)\(store.connected || settings.readAloudEnabled ? "" : " (disconnected)")"
     }
 
-    /// Refreshes the menu parts that depend on observable store/settings state:
-    /// the header label and the Start/Stop title.
+    /// Refreshes the menu parts that depend on observable store/settings state.
     private func renderMenuDynamicParts() {
+        if settings.readAloudEnabled {
+            renderReadAloudParts()
+        } else {
+            renderSocketParts()
+        }
+    }
+
+    /// Model B dynamic parts: a friendly state header + Pause/Resume + Stop Speaking.
+    private func renderReadAloudParts() {
+        let paused = store.paused
+        let glyph: String
+        let statusText: String
+        if paused {
+            glyph = "❙❙"
+            statusText = "Paused — tap Resume"
+        } else {
+            glyph = presentation(for: store.state).fallback
+            switch store.state {
+            case .idle:        statusText = "Ready — listening to Claude Code"
+            case .listening:   statusText = "Listening — dictating"
+            case .processing:  statusText = "Transcribing…"
+            case .speaking:    statusText = "Speaking — reading Claude's reply"
+            case .interrupted: statusText = "Interrupted"
+            }
+        }
+        headerItem.title = "\(glyph)  \(statusText)"
+
+        pauseItem.title = paused ? "Resume Voice" : "Pause Voice"
+        toggleSessionItem.isEnabled = (store.state == .speaking) && !paused
+
+        readAloudItem.state = settings.readAloudEnabled ? .on : .off
+        launchAtLoginItem.state = settings.launchAtLogin ? .on : .off
+        refreshVoiceChecks()
+    }
+
+    /// Socket-path dynamic parts (unchanged from the pre-Model-B menu).
+    private func renderSocketParts() {
         let info = presentation(for: store.state)
 
-        if settings.readAloudEnabled {
-            // ---- Model B: flowcode is the voice of Claude Code ----
-            let speaking = store.state == .speaking
-            headerItem.title = "\(info.fallback)  \(speaking ? "Speaking" : "Idle") • Claude Code voice"
-            toggleSessionItem.isEnabled = speaking
-            toggleSessionItem.title = speaking ? "Stop Speaking" : "Listening to Claude Code…"
-            bargeInItem.state = settings.bargeInEnabled ? .on : .off
-            streamingItem.state = settings.streamingChunking ? .on : .off
-            semanticItem.state = settings.semanticEndpointing ? .on : .off
-            launchAtLoginItem.state = settings.launchAtLogin ? .on : .off
-            return
-        }
-
-        // In HUD-only mode the "core" is Claude Code's voicemode MCP, which only
-        // exists while a `claude` session is running — so "disconnected" is the
-        // normal waiting state, not an error. Word it that way.
+        // In HUD-only mode the "core" is Claude Code's voicemode MCP, which only exists
+        // while a `claude` session is running — so "disconnected" is the normal waiting
+        // state, not an error. Word it that way.
         let connectivity: String
         if store.connected {
             connectivity = "Connected"
         } else {
             connectivity = settings.hudOnlyMode ? "Waiting for Claude Code…" : "Disconnected"
         }
-        // Lead the header with the state glyph for an at-a-glance read.
         headerItem.title = "\(info.fallback)  \(info.label) • \(connectivity)"
 
         if settings.hudOnlyMode {
-            // The app doesn't start sessions in HUD-only mode — Claude Code drives
-            // converse(). Make the entry an informational, non-clickable hint.
             toggleSessionItem.isEnabled = false
             toggleSessionItem.title = store.connected
                 ? "Voice runs in Claude Code"
                 : "Run `claude` to connect"
         } else {
-            // Self-managed core: Start/Stop needs a live core, so grey it out (and
-            // say why) when disconnected — never offer an action that can't land.
             toggleSessionItem.isEnabled = store.connected
             toggleSessionItem.title = store.connected
                 ? (store.sessionActive ? "Stop Voice" : "Start Voice")
                 : "Start Voice (core offline)"
         }
 
-        // Checkmarks reflect persisted settings. The feature toggles stay ENABLED even
-        // when disconnected — a change persists and is resynced to the core on connect.
         bargeInItem.state = settings.bargeInEnabled ? .on : .off
         streamingItem.state = settings.streamingChunking ? .on : .off
         semanticItem.state = settings.semanticEndpointing ? .on : .off
         launchAtLoginItem.state = settings.launchAtLogin ? .on : .off
     }
 
+    /// Tick the voice item matching the persisted setting; clear the rest.
+    private func refreshVoiceChecks() {
+        let current = settings.voice
+        for (id, item) in voiceItems {
+            item.state = (id == current) ? .on : .off
+        }
+    }
+
     // MARK: Observation
 
-    /// Begins (and continuously re-arms) Observation tracking. The closure reads
-    /// the observable properties we care about; when any of them changes,
-    /// `onChange` fires, we re-render, then call `startObserving()` again to
-    /// re-arm for the next mutation.
+    /// Begins (and continuously re-arms) Observation tracking. The closure reads the
+    /// observable properties we depend on; when any changes, `onChange` fires, we
+    /// re-render, then re-arm.
     private func startObserving() {
         withObservationTracking {
-            // Touch every observable property we depend on so the tracker
-            // registers a dependency on each.
             _ = store.state
             _ = store.connected
             _ = store.sessionActive
+            _ = store.paused
             _ = settings.bargeInEnabled
             _ = settings.streamingChunking
             _ = settings.semanticEndpointing
             _ = settings.launchAtLogin
+            _ = settings.readAloudEnabled
+            _ = settings.voice
         } onChange: { [weak self] in
-            // onChange is delivered synchronously at willSet time and may be off
-            // the main actor's static context; hop to the main actor to mutate AppKit.
+            // onChange is delivered synchronously at willSet time and may be off the main
+            // actor's static context; hop to the main actor to mutate AppKit.
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.renderButton()

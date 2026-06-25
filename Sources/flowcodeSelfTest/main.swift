@@ -225,6 +225,40 @@ func swarmChecks() {
                  "reset clears everything")
 }
 
+// MARK: - model B: pause/resume + speech text
+
+@MainActor
+func modelBChecks() {
+    print("== model B pause/resume ==")
+    let store = VoiceSessionStore()
+    let lv = LocalVoiceController(store: store)
+
+    // Simulate an in-flight read-aloud, then pause.
+    store.state = .speaking
+    store.sessionActive = true
+    lv.pause()
+    checks.check(lv.isPaused && store.paused, "pause() sets isPaused + store.paused")
+    checks.check(store.state == .idle && !store.sessionActive, "pause() forces idle + inactive")
+
+    lv.resume()
+    checks.check(!lv.isPaused && !store.paused, "resume() clears paused")
+    lv.resume() // idempotent
+    checks.check(!lv.isPaused, "resume() is idempotent")
+
+    lv.stop() // tear down timers/monitors started by resume()
+}
+
+func speechTextChecks() {
+    print("== speech text (model B) ==")
+    let parts = SpeechText.sentences(
+        from: "First here is a long opening clause that should be split, and then more text follows. Second sentence stays whole.")
+    checks.check(parts.count >= 3, "long first sentence is split at a clause boundary")
+    checks.check(parts.first?.hasSuffix(",") == true, "first clip ends at the comma (faster first audio)")
+
+    let codeOnly = SpeechText.sentences(from: "```\nlet x = 1\n```")
+    checks.check(codeOnly.isEmpty, "code-only message yields nothing to speak")
+}
+
 // MARK: - watchdog wait-status decode (phase 9)
 //
 // The watchdog (Helpers/flowcode-watchdog) decodes the Darwin wait(2) status by
@@ -256,6 +290,8 @@ wireChecks()
 await loopbackChecks()
 await metalChecks()
 swarmChecks()
+modelBChecks()
+speechTextChecks()
 watchdogChecks()
 print(checks.failures == 0 ? "\nALL PASS" : "\n\(checks.failures) FAILURE(S)")
 exit(checks.failures == 0 ? 0 : 1)

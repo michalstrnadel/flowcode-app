@@ -50,7 +50,9 @@ public final class TranscriptReader {
 
     public func start() {
         stop()
-        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+        // 0.25s: read-aloud starts within a quarter second of Claude finishing a message.
+        // The poll is just fstat + tail of appended bytes per file, so CPU cost is negligible.
+        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
         RunLoop.main.add(t, forMode: .common)

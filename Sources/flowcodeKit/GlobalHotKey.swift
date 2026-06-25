@@ -37,6 +37,12 @@ public final class GlobalHotKey {
         public static let commitDefault = KeyCombo(
             keyCode: UInt32(kVK_Return),
             modifiers: UInt32(controlKey | optionKey))
+
+        /// Default pause/resume chord (Model B): Control-Option-Space. Global, needs no
+        /// Accessibility grant, and cannot be triggered by speech.
+        public static let pauseDefault = KeyCombo(
+            keyCode: UInt32(kVK_Space),
+            modifiers: UInt32(controlKey | optionKey))
     }
 
     /// Invoked on the main actor when the hotkey fires.

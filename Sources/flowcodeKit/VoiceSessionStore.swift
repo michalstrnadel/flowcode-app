@@ -24,6 +24,11 @@ public final class VoiceSessionStore {
     /// True while a session is in flight (between SESSION_START and SESSION_END).
     public var sessionActive: Bool = false
 
+    /// Model B: user has paused the voice layer (read-aloud + dictation stopped) but the
+    /// app keeps running. Transient — resets to active on relaunch. The menu + HUD observe
+    /// it for live refresh. Set only by `LocalVoiceController.pause()/resume()`.
+    public var paused: Bool = false
+
     /// Whether the IPC socket to the Python core is currently connected.
     public var connected: Bool = false
 

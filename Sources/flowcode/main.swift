@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // arrives over the socket, which only happens when the Python gate is enabled).
     private var confirmGate: ConfirmGateController?
     private let commitHotKeyHolder = HotKeyHolder()
+    // Model B: global ⌃⌥Space to pause/resume the voice layer.
+    private let pauseHotKeyHolder = HotKeyHolder()
 
     // Phase 8 (swarm orchestration, DEFAULT OFF). The state is always present (cheap,
     // inert; SwarmState.init does no IO and starts no work); the FSEvents observer is
@@ -38,9 +40,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // flowcode tails the live session transcript and reads each new assistant
             // message aloud (Kokoro), driving the orb. NO socket, NO Python core, and
             // NO microphone (read-aloud doesn't capture) — so no mic prompt either.
-            let lv = LocalVoiceController(store: store)
+            let lv = LocalVoiceController(store: store, voice: settings.voice)
             lv.start()
             self.localVoice = lv
+
+            // Global pause/resume hotkey (⌃⌥Space). Carbon RegisterEventHotKey needs no
+            // Accessibility grant, so it works even before the user grants dictation perms.
+            pauseHotKeyHolder.installIfNeeded(combo: .pauseDefault) { [weak lv] in lv?.togglePause() }
         } else {
             // ---- Socket path: external voice core (voicemode MCP or spawned runner) ----
             // Request microphone access up front so the TCC grant attributes to flowcode.
@@ -75,7 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onSetFlag: { [weak self] key, enabled in
                 guard let self else { return }
                 Task { await self.client.send(.setFlag(key: key, value: enabled ? "true" : "false")) }
-            }
+            },
+            onTogglePause: { [weak self] in self?.localVoice?.togglePause() },
+            onOpenLog: { AuditLog().revealInFinder() },
+            onSetVoice: { [weak self] voice in self?.localVoice?.setVoice(voice) }
         )
 
         // Jarvis HUD: the floating orb that reacts to the live voice state.
@@ -195,10 +204,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class HotKeyHolder {
     private var hotKey: GlobalHotKey?
-    func installIfNeeded(_ onFire: @escaping @MainActor () -> Void) {
+    func installIfNeeded(combo: GlobalHotKey.KeyCombo = .commitDefault,
+                         _ onFire: @escaping @MainActor () -> Void) {
         guard hotKey == nil else { return }
         let hk = GlobalHotKey(onFire: onFire)
-        _ = hk.enable()
+        _ = hk.enable(combo)
         hotKey = hk
     }
 }

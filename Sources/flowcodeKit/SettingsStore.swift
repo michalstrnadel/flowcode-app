@@ -9,6 +9,7 @@
 
 import Foundation
 import Observation
+import ServiceManagement
 
 @MainActor
 @Observable
@@ -25,6 +26,7 @@ public final class SettingsStore {
         static let semanticEndpointing = "flowcode.semanticEndpointing"
         static let launchAtLogin       = "flowcode.launchAtLogin"
         static let language            = "flowcode.language"
+        static let voice               = "flowcode.voice"
         static let swarmMode           = "flowcode.swarmMode"
         static let hudOnlyMode         = "flowcode.hudOnlyMode"
         static let readAloud           = "flowcode.readAloud"
@@ -45,6 +47,9 @@ public final class SettingsStore {
 
     /// Default language tag used when nothing is persisted yet.
     private static let defaultLanguage = "en"
+
+    /// Default Kokoro TTS voice used when nothing is persisted yet.
+    public static let defaultVoice = "af_sky"
 
     // MARK: - Backing store
     //
@@ -71,15 +76,26 @@ public final class SettingsStore {
         didSet { defaults.set(semanticEndpointing, forKey: Keys.semanticEndpointing) }
     }
 
-    /// Register the app as a login item. (The actual SMAppService wiring lives
-    /// elsewhere; this flag is the persisted user intent.)
+    /// Register the app as a login item. Persists the intent AND applies it via
+    /// `SMAppService.mainApp` (register/unregister). The system keeps the registration
+    /// across launches, so we only act on a change — `didSet` doesn't fire during `init`,
+    /// which is exactly what we want (no re-register storm on every launch). Only takes
+    /// effect for the packaged `.app`; under `swift run` SMAppService throws and we log.
     public var launchAtLogin: Bool {
-        didSet { defaults.set(launchAtLogin, forKey: Keys.launchAtLogin) }
+        didSet {
+            defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
+            Self.applyLaunchAtLogin(launchAtLogin)
+        }
     }
 
     /// BCP-47-ish language tag for STT/TTS, e.g. "en". Defaults to "en".
     public var language: String {
         didSet { defaults.set(language, forKey: Keys.language) }
+    }
+
+    /// Kokoro TTS voice id used for read-aloud (Model B). Defaults to "af_sky".
+    public var voice: String {
+        didSet { defaults.set(voice, forKey: Keys.voice) }
     }
 
     /// Swarm / deep-orchestration mode (Phase 8, SECONDARY pillar, DEFAULT OFF). When on,
@@ -185,6 +201,15 @@ public final class SettingsStore {
             self.language = Self.defaultLanguage
         }
 
+        // Voice: fall back to the default Kokoro voice when missing or blank.
+        let storedVoice = defaults.string(forKey: Keys.voice)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let storedVoice, !storedVoice.isEmpty {
+            self.voice = storedVoice
+        } else {
+            self.voice = Self.defaultVoice
+        }
+
         // Socket override: nil unless a non-empty value is persisted.
         let storedSocket = defaults.string(forKey: Keys.socketPath)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -192,6 +217,25 @@ public final class SettingsStore {
             self.socketPathOverride = storedSocket
         } else {
             self.socketPathOverride = nil
+        }
+    }
+
+    // MARK: - Launch at login
+
+    /// Apply the login-item intent to the system via `SMAppService.mainApp`.
+    /// Idempotent (only acts when the current status disagrees). Failures (e.g. running
+    /// from `swift run` rather than a registered `.app`) are logged, not fatal — the
+    /// persisted checkmark still reflects the user's intent.
+    private static func applyLaunchAtLogin(_ enabled: Bool) {
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                if service.status != .enabled { try service.register() }
+            } else {
+                if service.status == .enabled { try service.unregister() }
+            }
+        } catch {
+            NSLog("flowcode: SMAppService \(enabled ? "register" : "unregister") failed: \(error.localizedDescription)")
         }
     }
 

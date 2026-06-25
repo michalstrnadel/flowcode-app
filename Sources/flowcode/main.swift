@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let client = IPCClient()              // actor
     private var statusController: StatusItemController?
     private var hud: HUDController?
+    // Spawns + supervises the Python voice core as a direct child (mic TCC + no orphans).
+    private var coreSupervisor: CoreSupervisor?
     // §7 confirmation gate (default-OFF: inert until a confirm_request actually
     // arrives over the socket, which only happens when the Python gate is enabled).
     private var confirmGate: ConfirmGateController?
@@ -32,10 +34,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // flowcode (the responsible process), not to a child or to the terminal.
         Task { _ = await MicPermission.ensureAccess() }
 
+        // Spawn the Python voice core as our direct child BEFORE connecting, so the
+        // socket comes up promptly and the mic TCC grant attributes to flowcode.app.
+        // No-op if the core is already running or its binaries are missing.
+        let socketPath = settings.socketPath
+        let supervisor = CoreSupervisor(socketPath: socketPath)
+        supervisor.start()
+        self.coreSupervisor = supervisor
+
         // Project the voice core's live state into the observable store, then start
         // connecting to the status socket (auto-reconnects with backoff).
         store.bind(to: client)
-        let socketPath = settings.socketPath
         Task { await client.connect(socketPath: socketPath) }
 
         // Push the menu's current flag state to the core whenever we (re)connect, so
@@ -89,6 +98,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Swarm mode (Phase 8) is default-off; only arm observation when explicitly enabled.
         startSwarmIfEnabled()
+    }
+
+    /// Tear down the supervised voice core when the app quits (it also self-exits via
+    /// its parent-death watchdog).
+    func applicationWillTerminate(_ notification: Notification) {
+        coreSupervisor?.stop()
     }
 
     /// Start read-only swarm observation iff swarmMode is on. Inert otherwise.

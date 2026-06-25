@@ -33,7 +33,7 @@ done
 
 # --- 2. scripts parse + shellcheck --------------------------------------------
 sect "scripts parse-clean"
-SCRIPTS=(build_app.sh make_venv.sh sign_notarize.sh preflight.sh _generate_appcast.sh)
+SCRIPTS=(build_app.sh make_venv.sh sign_notarize.sh preflight.sh _generate_appcast.sh setup.sh)
 for s in "${SCRIPTS[@]}"; do
     p="${SCRIPT_DIR}/${s}"
     if [ ! -f "${p}" ]; then fail "missing script ${s}"; continue; fi

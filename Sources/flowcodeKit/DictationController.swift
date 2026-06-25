@@ -180,8 +180,12 @@ public final class DictationController {
             catch { failed = true; NSLog("flowcode: transcription failed: \(error)") }
             await MainActor.run {
                 guard let self else { return }
-                if failed { NSSound.beep() }            // captured audio but STT failed
-                else if !text.isEmpty { self.insert(text) }
+                if failed {
+                    NSSound.beep()                       // captured audio but STT errored
+                } else if let clean = DictationController.usableTranscript(text) {
+                    self.insert(clean)                   // real speech → paste it
+                }
+                // else: silence / non-speech (e.g. "[BLANK_AUDIO]") → insert nothing.
                 self.resetOrb()
             }
         }
@@ -220,6 +224,28 @@ public final class DictationController {
         up.flags = .maskCommand
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
+    }
+
+    // MARK: - Transcript filtering
+
+    /// Strip whisper.cpp non-speech annotations ([BLANK_AUDIO], [ Silence ],
+    /// (inaudible), [MUSIC], …). Returns nil if nothing real is left (so a
+    /// silent / noise-only push-to-talk inserts NOTHING).
+    static func usableTranscript(_ raw: String) -> String? {
+        var t = raw
+        let patterns = [
+            #"(?i)\[\s*(blank[_ ]?audio|silence|music|noise|inaudible|pause|sound|applause|laughter|no speech|speaking foreign language|background noise)\s*\]"#,
+            #"(?i)\(\s*(silence|inaudible|music|noise|pause|no speech|background noise)\s*\)"#,
+        ]
+        for p in patterns {
+            guard let re = try? NSRegularExpression(pattern: p) else { continue }
+            t = re.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: " ")
+        }
+        if let ws = try? NSRegularExpression(pattern: #"\s+"#) {
+            t = ws.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: " ")
+        }
+        t = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
     }
 
     // MARK: - WAV encoding (mono int16, native sample rate; whisper.cpp resamples)

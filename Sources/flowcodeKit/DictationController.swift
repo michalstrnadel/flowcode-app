@@ -59,17 +59,24 @@ public final class DictationController {
         if recording { stopRecording(transcribe: false) }
     }
 
+    private var didPromptAccessibility = false
+
     private func installMonitorWhenTrusted() {
         guard monitor == nil else { return }
+        // SILENT trust check (no prompt) — calling the prompting variant on every
+        // timer tick is what spammed the Accessibility dialog repeatedly.
         if AXIsProcessTrusted() {
             installMonitor()
             accessibilityTimer?.invalidate(); accessibilityTimer = nil
             return
         }
-        // Not trusted yet: prompt once, then poll until granted.
-        let opts = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(opts)
-        NSLog("flowcode: dictation needs Accessibility — grant it in System Settings › Privacy & Security › Accessibility (no restart needed).")
+        // Prompt EXACTLY ONCE; then poll silently until the grant appears.
+        if !didPromptAccessibility {
+            didPromptAccessibility = true
+            let opts = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(opts)
+            NSLog("flowcode: dictation needs Accessibility — enable flowcode in System Settings › Privacy & Security › Accessibility (no restart needed).")
+        }
         if accessibilityTimer == nil {
             let t = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.installMonitorWhenTrusted() }

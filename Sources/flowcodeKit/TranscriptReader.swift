@@ -116,6 +116,12 @@ public final class TranscriptReader {
               let content = message["content"] as? [[String: Any]]
         else { return }
 
+        // Skip "action" messages — text that merely narrates a tool call
+        // ("Let me update memory:", "I'll fix that…"). Read only Claude's pure-prose
+        // replies (messages with no tool_use), i.e. what it actually says to you.
+        let hasToolUse = content.contains { ($0["type"] as? String) == "tool_use" }
+        if hasToolUse { return }
+
         var parts: [String] = []
         for item in content where (item["type"] as? String) == "text" {
             if let t = item["text"] as? String, !t.isEmpty { parts.append(t) }

@@ -205,11 +205,18 @@ public final class StatusItemController {
     private func renderMenuDynamicParts() {
         let info = presentation(for: store.state)
         let connectivity = store.connected ? "Connected" : "Disconnected"
-        headerItem.title = "\(info.label) • \(connectivity)"
+        // Lead the header with the state glyph for an at-a-glance read.
+        headerItem.title = "\(info.fallback)  \(info.label) • \(connectivity)"
 
-        toggleSessionItem.title = store.sessionActive ? "Stop Voice" : "Start Voice"
+        // Start/Stop needs a live core: grey it out (and say why) when disconnected,
+        // so the menu never offers an action that can't reach the voice core.
+        toggleSessionItem.isEnabled = store.connected
+        toggleSessionItem.title = store.connected
+            ? (store.sessionActive ? "Stop Voice" : "Start Voice")
+            : "Start Voice (core offline)"
 
-        // Keep setting checkmarks in sync in case a value changed elsewhere.
+        // Checkmarks reflect persisted settings. The feature toggles stay ENABLED even
+        // when disconnected — a change persists and is resynced to the core on connect.
         bargeInItem.state = settings.bargeInEnabled ? .on : .off
         streamingItem.state = settings.streamingChunking ? .on : .off
         semanticItem.state = settings.semanticEndpointing ? .on : .off

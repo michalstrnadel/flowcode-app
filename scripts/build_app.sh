@@ -96,6 +96,15 @@ sed \
 # Validate the plist actually parses (catches a bad sed substitution early).
 plutil -lint "${CONTENTS}/Info.plist" >/dev/null
 
+# --- app icon (Resources/flowcode.icns, referenced by CFBundleIconFile) --------
+ICON_SRC="${REPO_ROOT}/Resources/flowcode.icns"
+if [[ -f "${ICON_SRC}" ]]; then
+    log "copying app icon"
+    cp -f "${ICON_SRC}" "${CONTENTS}/Resources/flowcode.icns"
+else
+    log "WARN: ${ICON_SRC} missing — bundle will use the generic icon"
+fi
+
 # --- placeholders so the layout is self-documenting ---------------------------
 cat > "${CONTENTS}/Resources/python/.placeholder" <<'EOF'
 This directory holds the relocatable embedded CPython venv with the voicemode

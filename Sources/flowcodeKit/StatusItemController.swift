@@ -18,6 +18,9 @@ public final class StatusItemController {
     private let settings: SettingsStore
     private let onToggleSession: () -> Void
     private let onQuit: () -> Void
+    /// Push a voice-core flag change to the Python core (key = VOICEMODE_* env name).
+    /// Default no-op keeps the controller usable in isolation / tests.
+    private let onSetFlag: (_ key: String, _ enabled: Bool) -> Void
 
     // MARK: AppKit objects
 
@@ -47,11 +50,13 @@ public final class StatusItemController {
     public init(store: VoiceSessionStore,
                 settings: SettingsStore,
                 onToggleSession: @escaping () -> Void,
-                onQuit: @escaping () -> Void) {
+                onQuit: @escaping () -> Void,
+                onSetFlag: @escaping (_ key: String, _ enabled: Bool) -> Void = { _, _ in }) {
         self.store = store
         self.settings = settings
         self.onToggleSession = onToggleSession
         self.onQuit = onQuit
+        self.onSetFlag = onSetFlag
 
         // Variable-length item so the glyph/title can size naturally.
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -92,27 +97,34 @@ public final class StatusItemController {
 
         menu.addItem(.separator())
 
-        // Settings toggles. Each flips its bound Bool and refreshes its checkmark.
+        // Settings toggles. Each flips its bound Bool, refreshes its checkmark, and —
+        // for the three voice-core flags — pushes the change to the live core via
+        // `onSetFlag` (keyed by the VOICEMODE_* env name). Launch-at-Login is a local
+        // login item with no core flag, so it passes no key.
         configureToggle(bargeInItem,
                         title: "Barge-In Enabled",
+                        flagKey: SettingsStore.bargeInFlagKey,
                         get: { [weak self] in self?.settings.bargeInEnabled ?? false },
                         set: { [weak self] new in self?.settings.bargeInEnabled = new })
         menu.addItem(bargeInItem)
 
         configureToggle(streamingItem,
                         title: "Streaming Chunking",
+                        flagKey: SettingsStore.streamingFlagKey,
                         get: { [weak self] in self?.settings.streamingChunking ?? false },
                         set: { [weak self] new in self?.settings.streamingChunking = new })
         menu.addItem(streamingItem)
 
         configureToggle(semanticItem,
                         title: "Semantic Endpointing",
+                        flagKey: SettingsStore.semanticFlagKey,
                         get: { [weak self] in self?.settings.semanticEndpointing ?? false },
                         set: { [weak self] new in self?.settings.semanticEndpointing = new })
         menu.addItem(semanticItem)
 
         configureToggle(launchAtLoginItem,
                         title: "Launch at Login",
+                        flagKey: nil,
                         get: { [weak self] in self?.settings.launchAtLogin ?? false },
                         set: { [weak self] new in self?.settings.launchAtLogin = new })
         menu.addItem(launchAtLoginItem)
@@ -129,19 +141,23 @@ public final class StatusItemController {
         menu.addItem(quitItem)
     }
 
-    /// Wires a checkmark toggle item to a getter/setter pair on `settings`.
+    /// Wires a checkmark toggle item to a getter/setter pair on `settings`. When
+    /// `flagKey` is non-nil, the new value is also pushed to the live voice core via
+    /// `onSetFlag` so the menu actually reconfigures the running session.
     private func configureToggle(_ item: NSMenuItem,
                                  title: String,
+                                 flagKey: String?,
                                  get: @escaping () -> Bool,
                                  set: @escaping (Bool) -> Void) {
         item.title = title
         item.target = coordinator
         item.action = #selector(ActionCoordinator.invoke(_:))
         item.state = get() ? .on : .off
-        coordinator.bind(item) { [weak item] in
+        coordinator.bind(item) { [weak self, weak item] in
             let next = !get()
             set(next)
             item?.state = next ? .on : .off
+            if let flagKey { self?.onSetFlag(flagKey, next) }
         }
     }
 

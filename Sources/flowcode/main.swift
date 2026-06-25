@@ -38,12 +38,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let socketPath = settings.socketPath
         Task { await client.connect(socketPath: socketPath) }
 
+        // Push the menu's current flag state to the core whenever we (re)connect, so
+        // the live core always matches the menu — even after a core restart.
+        observeConnection()
+
         // Build the menu-bar UI.
         statusController = StatusItemController(
             store: store,
             settings: settings,
             onToggleSession: { [weak self] in self?.toggleSession() },
-            onQuit: { NSApp.terminate(nil) }
+            onQuit: { NSApp.terminate(nil) },
+            onSetFlag: { [weak self] key, enabled in
+                guard let self else { return }
+                Task { await self.client.send(.setFlag(key: key, value: enabled ? "true" : "false")) }
+            }
         )
 
         // Jarvis HUD: the floating orb that reacts to the live voice state.
@@ -106,10 +114,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Start or stop a voice session based on the current session state.
-    /// (Feature-flag sync to the core lands with the control handler in a later phase.)
     private func toggleSession() {
         let wantStop = store.sessionActive
         Task { await client.send(wantStop ? .stop : .start) }
+    }
+
+    // MARK: - Flag resync on (re)connect
+
+    /// Re-arming observation of `store.connected`. On a rising edge (just connected),
+    /// push the menu's current voice-core flags so the live core matches the UI even
+    /// after a core restart / reconnect.
+    private var wasConnected = false
+    private func observeConnection() {
+        withObservationTracking {
+            _ = store.connected
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.handleConnectionChange()
+                self?.observeConnection()   // re-arm for the next change
+            }
+        }
+    }
+
+    private func handleConnectionChange() {
+        let now = store.connected
+        if now && !wasConnected { resyncFlagsToCore() }
+        wasConnected = now
+    }
+
+    /// Send the three voice-core flags reflecting the current menu state. (Launch-at-Login
+    /// is a local login item, not a core flag, so it is not pushed.)
+    private func resyncFlagsToCore() {
+        let bargeIn = settings.bargeInEnabled
+        let streaming = settings.streamingChunking
+        let semantic = settings.semanticEndpointing
+        Task {
+            await client.send(.setFlag(key: SettingsStore.bargeInFlagKey, value: bargeIn ? "true" : "false"))
+            await client.send(.setFlag(key: SettingsStore.streamingFlagKey, value: streaming ? "true" : "false"))
+            await client.send(.setFlag(key: SettingsStore.semanticFlagKey, value: semantic ? "true" : "false"))
+        }
     }
 }
 

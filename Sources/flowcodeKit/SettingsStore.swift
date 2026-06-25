@@ -29,6 +29,16 @@ public final class SettingsStore {
         static let socketPath          = "flowcode.socketPath"
     }
 
+    // MARK: - Voice-core flag keys
+    //
+    // The VOICEMODE_* env var each toggle maps to when pushed to the Python core via
+    // ControlCommand.setFlag. These are the EXACT names config.reload_configuration()
+    // re-reads, so flipping a toggle reconfigures the LIVE core. (launchAtLogin is a
+    // macOS-local login item and has no voice-core flag — it is never pushed.)
+    public static let bargeInFlagKey   = "VOICEMODE_BARGEIN_ENABLED"
+    public static let streamingFlagKey = "VOICEMODE_TTS_SENTENCE_CHUNKING"
+    public static let semanticFlagKey  = "VOICEMODE_SEMANTIC_ENDPOINTING"
+
     // MARK: - Defaults
 
     /// Default language tag used when nothing is persisted yet.

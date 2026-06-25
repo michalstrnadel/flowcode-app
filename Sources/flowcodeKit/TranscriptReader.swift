@@ -24,7 +24,7 @@ public final class TranscriptReader {
     /// Fired with the raw assistant prose for each new assistant message.
     public var onAssistantText: ((String) -> Void)?
 
-    private let projectsDir: URL
+    private let projectRoots: [URL]
     private var timer: Timer?
     // Per-file byte offset + partial-line carryover. Tracking EVERY session file
     // (not just "the most recent") is what makes this robust to multiple concurrent
@@ -33,10 +33,19 @@ public final class TranscriptReader {
     private var offsets: [String: UInt64] = [:]
     private var partials: [String: Data] = [:]
 
-    public init(projectsDir: URL? = nil) {
-        self.projectsDir = projectsDir
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".claude/projects", isDirectory: true)
+    public init(projectRoots: [URL]? = nil) {
+        if let projectRoots {
+            self.projectRoots = projectRoots
+        } else {
+            // Claude Code writes session transcripts under <CLAUDE_CONFIG_DIR>/projects.
+            // Different setups use different config dirs, so watch all the common ones:
+            //   ~/.claude/projects          (default)
+            //   ~/.claude-personal/projects (this machine's real sessions)
+            //   ~/.claude-work/projects     (symlink → personal here; deduped by realpath)
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            self.projectRoots = [".claude/projects", ".claude-personal/projects", ".claude-work/projects"]
+                .map { home.appendingPathComponent($0, isDirectory: true) }
+        }
     }
 
     public func start() {
@@ -117,25 +126,28 @@ public final class TranscriptReader {
 
     // MARK: - File discovery
 
-    /// All *.jsonl session files across ~/.claude/projects/<proj>/. Each is tailed
-    /// independently from its own baseline; idle sessions simply never append.
+    /// All *.jsonl session files across every watched root's <proj>/ subdirs. Each is
+    /// tailed independently from its own baseline; idle sessions simply never append.
+    /// Deduped by canonical (symlink-resolved) path so a root that symlinks to another
+    /// (e.g. ~/.claude-work → ~/.claude-personal) is never read twice.
     private func allSessionFiles() -> [String] {
         let fm = FileManager.default
-        guard let projDirs = try? fm.contentsOfDirectory(
-            at: projectsDir,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-
+        var seen = Set<String>()
         var result: [String] = []
-        for proj in projDirs {
-            guard let files = try? fm.contentsOfDirectory(
-                at: proj,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
+        for root in projectRoots {
+            guard let projDirs = try? fm.contentsOfDirectory(
+                at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
             ) else { continue }
-            for f in files where f.pathExtension == "jsonl" {
-                result.append(f.path)
+            for proj in projDirs {
+                guard let files = try? fm.contentsOfDirectory(
+                    at: proj, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+                ) else { continue }
+                for f in files where f.pathExtension == "jsonl" {
+                    let canonical = f.resolvingSymlinksInPath().path
+                    if seen.insert(canonical).inserted {
+                        result.append(canonical)
+                    }
+                }
             }
         }
         return result

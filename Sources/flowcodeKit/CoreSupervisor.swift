@@ -42,9 +42,11 @@ public final class CoreSupervisor {
         let env = ProcessInfo.processInfo.environment
         self.hudOnly = hudOnly
         let home = NSHomeDirectory()
-        // Defaults target this machine's checkout; all overridable via env for
-        // portability until the core is embedded in the bundle (Phase 9).
-        let forkDefault = "/Users/michalstrnadel/Documents/Macbook M3/Warp/voicecode_claudecode/voicemode"
+        // Experimental socket path only (Model B never spawns a core). The voicemode
+        // fork location is NOT machine-specific here: set FLOWCODE_CORE_CWD to your
+        // checkout. The default is a home-relative location; until the core is embedded
+        // in the bundle (Phase 9), a developer points the env var at their fork.
+        let forkDefault = "\(home)/.voicemode/flowcode/voicemode"
         self.workingDir = env["FLOWCODE_CORE_CWD"] ?? forkDefault
         self.pythonPath = env["FLOWCODE_CORE_PYTHON"] ?? "\(self.workingDir)/.venv/bin/python"
         self.runnerPath = env["FLOWCODE_RUNNER"] ?? "\(home)/.voicemode/flowcode/flowcode_runner.py"

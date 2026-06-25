@@ -12,11 +12,11 @@ cask "flowcode" do
 
   arch arm: "arm64", intel: "x86_64"
 
-  url "https://github.com/mbailey/flowcode/releases/download/v#{version}/flowcode-#{version}-#{arch}.zip",
-      verified: "github.com/mbailey/flowcode/"
+  url "https://github.com/michalstrnadel/flowcode-app/releases/download/v#{version}/flowcode-#{version}-#{arch}.zip",
+      verified: "github.com/michalstrnadel/flowcode-app/"
   name "flowcode"
   desc "Real-time, interruptible voice for Claude Code"
-  homepage "https://github.com/mbailey/flowcode"
+  homepage "https://github.com/michalstrnadel/flowcode-app"
 
   # macOS 14+ (Sonoma) — matches Package.swift platforms + Info.plist LSMinimumSystemVersion.
   depends_on macos: ">= :sonoma"
@@ -28,11 +28,11 @@ cask "flowcode" do
 
   zap trash: [
     "~/Library/Application Support/flowcode",
-    "~/Library/Caches/cz.slevomat.flowcode",
-    "~/Library/HTTPStorages/cz.slevomat.flowcode",
-    "~/Library/Preferences/cz.slevomat.flowcode.plist",
-    "~/Library/Saved Application State/cz.slevomat.flowcode.savedState",
+    "~/Library/Caches/io.github.michalstrnadel.flowcode",
+    "~/Library/HTTPStorages/io.github.michalstrnadel.flowcode",
+    "~/Library/Preferences/io.github.michalstrnadel.flowcode.plist",
+    "~/Library/Saved Application State/io.github.michalstrnadel.flowcode.savedState",
     # Sparkle update sandbox.
-    "~/Library/Caches/cz.slevomat.flowcode.ShipIt",
+    "~/Library/Caches/io.github.michalstrnadel.flowcode.ShipIt",
   ]
 end

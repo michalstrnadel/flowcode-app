@@ -134,6 +134,38 @@ scripts, `version.env` sanity (incl. that `VOICEMODE_COMMIT` is a 40-char sha),
    lets an attacker push a malicious update. Keep it in secrets only, shred it
    after use in CI (the workflow does). `SUPublicEDKey` in `Info.plist` must match.
 
+7. **Bundle-id change ⇒ one-time TCC re-grant.** macOS keys the Microphone and
+   Accessibility grants to the codesign **Designated Requirement (DR)**, which embeds
+   `BUNDLE_ID`. The id was changed from `cz.slevomat.flowcode` to
+   `io.github.michalstrnadel.flowcode` for the open-source release, so the DR's
+   identifier changed and **every existing install/dev machine must re-grant both
+   permissions once**. Until then, dictation (Accessibility) and the mic path silently
+   fail. The stable self-signed dev cert is **reused** — only the identifier part of the
+   DR changes, so this is a one-time re-grant, not a cert recreation. Migration on a dev
+   machine:
+
+   ```sh
+   tccutil reset Microphone    io.github.michalstrnadel.flowcode
+   tccutil reset Accessibility io.github.michalstrnadel.flowcode
+   # relaunch flowcode, then grant once when prompted
+   ```
+
+   (If a build of the OLD id was ever distributed, an id + feed-URL change also breaks
+   Sparkle update continuity — those users must reinstall. Safe here: `BUILD=1` has not
+   been publicly shipped.)
+
+---
+
+## Build-from-source vs notarized release
+
+The open-source v1 ships a **build-from-source** path (`scripts/setup.sh`): contributors
+clone, build, and run with an **ad-hoc** signature when no Developer ID is present. An
+ad-hoc build re-prompts for Mic/Accessibility on every rebuild (TCC is keyed to the
+signature) and Gatekeeper warns on first open (`xattr -dr com.apple.quarantine
+dist/flowcode.app` clears it). A **notarized Developer-ID `.zip`** (the secrets + scripts
+below) is the only friction-free path for end users — that is a later milestone and
+requires a paid Apple Developer account.
+
 ---
 
 ## Release checklist

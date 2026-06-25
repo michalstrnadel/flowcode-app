@@ -37,7 +37,7 @@ public final class HUDController {
     public init(store: VoiceSessionStore, settings: SettingsStore) {
         self.store = store
         self.settings = settings
-        self.orbView = OrbMetalView(frame: NSRect(x: 0, y: 0, width: 220, height: 220))
+        self.orbView = OrbMetalView(frame: NSRect(x: 0, y: 0, width: 320, height: 320))
         self.panel = HUDPanel(contentView: orbView)
 
         orbView.frameProvider = { [weak self] elapsed in
@@ -86,9 +86,12 @@ public final class HUDController {
 
         // Live amplitude: mic while listening, assistant TTS level while speaking, else silent.
         let rawAmp: Float
+        let socketRMS = Float(min(1.0, max(0.0, store.lastRMS)))
         switch store.state {
-        case .listening: rawAmp = micRunning ? mic.level : 0
-        case .speaking:  rawAmp = Float(min(1.0, max(0.0, store.lastRMS)))
+        // Listening reacts to the user's mic; fall back to any socket-provided level so the
+        // orb still shows life if mic access was denied (and so a headless driver can demo it).
+        case .listening: rawAmp = max(micRunning ? mic.level : 0, socketRMS)
+        case .speaking:  rawAmp = socketRMS
         default:         rawAmp = 0
         }
         orbState.amplitude = rawAmp        // smoothed internally by OrbState

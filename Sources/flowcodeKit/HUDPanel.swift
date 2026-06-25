@@ -29,7 +29,7 @@ public final class HUDPanel {
     // MARK: Constants
 
     /// The fixed HUD size in points. Square so the orb's glow has equal margins.
-    private static let panelSize = NSSize(width: 220, height: 220)
+    private static let panelSize = NSSize(width: 320, height: 320)
 
     /// Vertical inset from the top of the screen's visible frame to the top edge
     /// of the panel. Keeps the orb clear of the menu bar / notch area.

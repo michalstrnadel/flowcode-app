@@ -106,7 +106,7 @@ public final class OrbMetalView: NSView {
     #include <metal_stdlib>
     using namespace metal;
 
-    // Mirror of the Swift OrbUniforms — three float4s, identical byte layout.
+    // Mirror of the Swift OrbUniforms - three float4s, identical byte layout.
     struct OrbUniforms {
         float4 p0; // (time, amplitude, intensity, motion)
         float4 p1; // (resWidthPx, resHeightPx, stateBlend, pad)
@@ -118,33 +118,26 @@ public final class OrbMetalView: NSView {
         float2 uv;       // 0..1 across the viewport
     };
 
-    // Full-screen triangle: 3 vertices, no vertex buffer. The oversized triangle covers
-    // the whole clip space; the rasterizer clips it to the viewport.
+    // Full-screen triangle: 3 vertices, no vertex buffer.
     vertex VSOut orbVertex(uint vid [[vertex_id]]) {
         float2 pos = float2((vid == 2) ? 3.0 : -1.0,
                             (vid == 1) ? 3.0 : -1.0);
         VSOut out;
         out.position = float4(pos, 0.0, 1.0);
-        // Map clip [-1,1] -> uv [0,1]; flip Y so up is up.
         out.uv = float2(pos.x * 0.5 + 0.5, 1.0 - (pos.y * 0.5 + 0.5));
         return out;
     }
 
-    // --- small helpers -------------------------------------------------------
+    // --- noise helpers -------------------------------------------------------
 
     static inline float saturatef(float x) { return clamp(x, 0.0, 1.0); }
 
-    // Smooth, energy-preserving falloff for the core/glow.
-    static inline float softFalloff(float d, float radius, float soft) {
-        return 1.0 - smoothstep(radius - soft, radius + soft, d);
-    }
-
-    // Cheap value noise for subtle internal texture (processing swirl).
     static inline float hash21(float2 p) {
         p = fract(p * float2(123.34, 345.45));
         p += dot(p, p + 34.345);
         return fract(p.x * p.y);
     }
+
     static inline float vnoise(float2 p) {
         float2 i = floor(p);
         float2 f = fract(p);
@@ -156,11 +149,25 @@ public final class OrbMetalView: NSView {
         return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
     }
 
-    // Premium tone shaping: lift toward white in the hot core, keep accent in the glow.
-    static inline float3 toneAccent(float3 accent, float energy) {
-        // energy 0..~1.5; near the core push toward white for a luminous, non-gamer look.
-        float3 hot = mix(accent, float3(1.0), saturatef((energy - 0.65) * 1.6));
-        return hot * energy;
+    static inline float fbm(float2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        float2x2 m = float2x2(1.6, 1.2, -1.2, 1.6);
+        for (int i = 0; i < 4; i++) {
+            v += a * vnoise(p);
+            p = m * p;
+            a *= 0.5;
+        }
+        return v;
+    }
+
+    // Emissive plasma tone: keep accent saturated, only a tiny hot core nears white.
+    static inline float3 plasmaTone(float3 accent, float3 hotAccent, float energy) {
+        float3 col = mix(accent, hotAccent, saturatef(energy * 0.55));
+        float whiteMix = smoothstep(1.35, 2.1, energy) * 0.6;
+        col = mix(col, float3(1.0), whiteMix);
+        float lum = energy / (1.0 + energy * 0.65); // Reinhard knee
+        return col * lum * 1.55;
     }
 
     fragment float4 orbFragment(VSOut in [[stage_in]],
@@ -169,98 +176,98 @@ public final class OrbMetalView: NSView {
         float  amp       = saturatef(u.p0.y);
         float  intensity = saturatef(u.p0.z);
         float  motion    = u.p0.w;
-        float2 res        = max(u.p1.xy, float2(1.0, 1.0));
+        float2 res       = max(u.p1.xy, float2(1.0, 1.0));
         float3 accent    = u.p2.xyz;
 
-        // Aspect-correct, centered coordinates in [-1,1]-ish (square units).
-        float2 uv = in.uv;
-        float2 p  = (uv - 0.5) * 2.0;
+        // Aspect-correct, centered coordinates.
+        float2 p  = (in.uv - 0.5) * 2.0;
         p.x *= res.x / res.y;
+        float dist = length(p);
 
-        float  dist = length(p);
-        float  ang  = atan2(p.y, p.x);
+        // ---- smooth motion-band weights (no hard transitions) ----
+        float wIdle    = 1.0 - smoothstep(0.0, 0.5, motion);
+        float wListen  = smoothstep(0.0, 1.0, motion) * (1.0 - smoothstep(1.0, 2.0, motion));
+        float wProcess = smoothstep(1.0, 2.0, motion) * (1.0 - smoothstep(2.0, 3.0, motion));
+        float wSpeak   = smoothstep(2.0, 3.0, motion) * (1.0 - smoothstep(3.0, 4.0, motion));
+        float wInterr  = smoothstep(3.0, 4.0, motion);
 
-        // Base radius with a gentle global breathing; amplitude grows the orb a touch.
-        float baseR = 0.34;
-        float pulse = 0.0;
-        float coreSoft = 0.045;     // edge softness of the solid core
-        float glowGain = 1.0;       // multiplies the outer glow
-        float ripple   = 0.0;       // radial displacement / banding contribution
-        float internalTex = 0.0;    // additive internal structure (swirl)
+        float flash = exp(-fract(time) * 5.0);
 
-        // ---- per-state MOTION shaping ----
-        // idle (0): slow, calm breathing.
-        // listening (1): reactive ripple riding on amplitude.
-        // processing (2): slow internal swirl, steady shell.
-        // speaking (3): concentric outgoing waves.
-        // interrupted (4): brief contracted, sharp flash.
-        if (motion < 0.5) {
-            // idle — breathing
-            pulse = 0.018 * sin(time * 1.1);
-            glowGain = 0.9;
-        } else if (motion < 1.5) {
-            // listening — amplitude-reactive ripple
-            pulse = 0.02 * sin(time * 1.6) + amp * 0.10;
-            ripple = amp * 0.045 * sin(ang * 6.0 + time * 3.0);
-            glowGain = 1.0 + amp * 1.2;
-        } else if (motion < 2.5) {
-            // processing — slow internal swirl, calm shell
-            pulse = 0.012 * sin(time * 0.9);
-            float2 sp = float2(cos(time * 0.35), sin(time * 0.35));
-            float n = vnoise(p * 3.4 + sp * 1.5 + time * 0.12);
-            float n2 = vnoise(p * 6.0 - sp * 1.0 - time * 0.08);
-            internalTex = (n * 0.6 + n2 * 0.4) * softFalloff(dist, baseR, 0.18) * 0.55;
-            glowGain = 0.95;
-        } else if (motion < 3.5) {
-            // speaking — concentric outgoing waves
-            pulse = 0.02 * sin(time * 1.4) + amp * 0.06;
-            float wave = sin(dist * 26.0 - time * 6.0);
-            ripple = (0.012 + amp * 0.03) * wave;
-            internalTex = saturatef(wave) * softFalloff(dist, baseR + 0.06, 0.22) * (0.18 + amp * 0.25);
-            glowGain = 1.05 + amp * 0.8;
-        } else {
-            // interrupted — brief contracted flash
-            float flash = exp(-fract(time) * 4.0); // decaying within each second
-            pulse = -0.05 + flash * 0.02;
-            coreSoft = 0.03;
-            glowGain = 0.6 + flash * 1.6;
-        }
+        // ---- BREATHING: idle breathes deeply & slowly; listening is quicker/alert ----
+        float slowBreath = sin(time * 0.8);              // ~0.13 Hz, deep and calm
+        float fastBreath = sin(time * 2.4);              // attentive listening pulse
+        float breathe = 0.050 * wIdle * slowBreath
+                      + 0.016 * wListen * fastBreath;
 
-        float radius = baseR + pulse + ripple;
+        // ---- core radius per state ----
+        float ampGrow  = amp * (0.12 * wListen + 0.14 * wSpeak);
+        float contract = wInterr * (-0.12 + flash * 0.07);   // interrupted: sharp pull-in
+        float coreR    = 0.30 + breathe + ampGrow + contract;
 
-        // Solid luminous core (SDF sphere): bright center -> soft edge.
-        float core = softFalloff(dist, radius, coreSoft);
-        // Fake spherical shading: brighten toward an upper-left light, darken the rim.
-        float2 lightDir = normalize(float2(-0.4, 0.6));
-        float lambert = saturatef(dot(normalize(p + 1e-4), lightDir) * 0.5 + 0.6);
-        float sphere = core * mix(0.55, 1.0, lambert);
+        // ---- domain-warped flow field (fbm of fbm); speed encodes the state ----
+        float flowSpeed = 0.05 * wIdle
+                        + (0.12 + amp * 0.30) * wListen
+                        + 0.40 * wProcess                 // thinking churns fastest, amp-decoupled
+                        + (0.20 + amp * 0.25) * wSpeak
+                        + (0.05 + flash * 0.5) * wInterr;
+        float t = time * flowSpeed;
+        float warpAmt = 0.55 + 0.55 * wProcess + amp * 0.35 * (wListen + wSpeak);
 
-        // Soft additive outer glow — wide, low-amplitude halo around the core.
-        float glow = 0.0;
-        glow += softFalloff(dist, radius + 0.12, 0.16) * 0.35;     // near halo
-        glow += exp(-dist * 2.6) * 0.20;                            // broad bloom
-        glow *= glowGain;
+        float2 q = float2(fbm(p * 2.2 + float2(0.0, t)),
+                          fbm(p * 2.2 + float2(5.2, -t) + 1.7));
+        float2 r = float2(fbm(p * 2.6 + q * warpAmt + float2(1.7, 9.2) + t * 0.7),
+                          fbm(p * 2.6 + q * warpAmt + float2(8.3, 2.8) - t * 0.5));
+        float flow = fbm(p * 3.0 + r * (warpAmt + 0.4) + t * 0.9) - 0.5;
 
-        // A faint rim highlight at the sphere terminator for a glassy, premium feel.
-        float rim = smoothstep(radius - 0.02, radius + 0.01, dist) *
-                    softFalloff(dist, radius + 0.05, 0.05) * 0.6;
+        // state-specific surface motion
+        float speakWave  = sin(dist * 20.0 - time * 6.0) * (0.12 + amp * 0.28) * wSpeak;
+        float listenWave = sin(dist * 13.0 - time * 3.2) * (0.05 + amp * 0.35) * wListen;
 
-        // Compose energy field (pre-color).
-        float energy = sphere * 1.15 + glow + rim + internalTex;
-        energy *= mix(0.35, 1.25, intensity);   // intensity scales overall brightness
+        // ---- emissive volume (no sphere shading, no rim) ----
+        float rr = dist / max(coreR, 0.001);
+        float body    = exp(-rr * rr * 2.4);     // soft luminous core
+        float halo    = exp(-dist * 3.1) * 0.50; // additive bloom (tighter)
+        float farGlow = exp(-dist * 2.5) * 0.10; // broad ambient bloom (smaller halo)
 
-        // Color: accent in the glow, lifting toward white in the hot core.
-        float3 rgb = toneAccent(accent, energy);
+        float filaments = (flow + speakWave + listenWave);
+        float interior = body * (1.0 + filaments * 1.2);
+        interior = max(interior, body * 0.35);   // luminous floor
 
-        // Subtle hue drift cyan -> violet over time for life (kept very gentle).
-        float drift = 0.5 + 0.5 * sin(time * 0.15);
-        float3 violet = float3(accent.x * 0.85 + 0.15, accent.y * 0.55, min(accent.z + 0.10, 1.0));
-        rgb = mix(rgb, rgb * 0.85 + violet * 0.18 * energy, drift * 0.35);
+        // ---- THINKING: a bright nucleus orbits the core during processing ----
+        float orbAng = time * 1.8;
+        float2 dp1 = p - float2(cos(orbAng), sin(orbAng)) * (coreR * 0.5);
+        float nucleus = exp(-dot(dp1, dp1) * 34.0) * wProcess * (0.8 + 0.2 * sin(time * 6.0));
+        float2 dp2 = p - float2(cos(-orbAng * 0.7), sin(-orbAng * 0.7)) * (coreR * 0.32);
+        float nucleus2 = exp(-dot(dp2, dp2) * 60.0) * wProcess * 0.4;
+        float churn = wProcess * saturatef(flow * 2.0) * body * 0.5;
 
-        // Transparent background: alpha is the orb's coverage + glow (additive look),
-        // premultiplied so the alpha-blended pipeline composites it correctly.
-        float alpha = saturatef(sphere * 1.1 + glow * 0.85 + rim);
-        rgb = min(rgb, float3(1.0)); // avoid harsh clipping artifacts
+        // ---- compose energy ----
+        float energy = interior + halo + farGlow + churn + nucleus + nucleus2;
+
+        float idleGlow   = 0.65 + 0.35 * (0.5 + 0.5 * slowBreath);  // idle glows with the breath
+        float ampBright  = 1.0 + amp * (0.8 * wListen + 0.7 * wSpeak);
+        float stateBright = idleGlow * wIdle + 1.05 * wListen + 1.1 * wProcess
+                          + 1.15 * wSpeak + (0.7 + flash * 1.5) * wInterr;
+        energy *= mix(0.45, 1.25, intensity) * ampBright * stateBright;
+
+        // ---- colour: cool accent drifting cyan -> violet with energy/state ----
+        float3 violet = float3(saturatef(accent.x * 0.75 + 0.30),
+                               saturatef(accent.y * 0.40),
+                               saturatef(accent.z + 0.12));
+        float drift = 0.5 + 0.5 * sin(time * 0.13);
+        float driftMix = saturatef(0.25 + 0.55 * drift
+                                   + 0.40 * (wProcess + wInterr) + amp * 0.20);
+        float3 hotAccent = mix(accent, violet, driftMix);
+        float3 rgb = plasmaTone(accent, hotAccent, energy);
+
+        // ---- alpha + radial edge window (kills the square halo on light backgrounds) ----
+        float alpha = saturatef(body * 1.05 + halo * 0.8 + farGlow * 0.6
+                                + churn * 0.5 + (nucleus + nucleus2) * 0.7);
+        // Fade the whole field to EXACTLY 0 before the panel edge so no faint square
+        // tail shows on a white background (invisible on dark, clean on light).
+        float edgeWin = 1.0 - smoothstep(0.50, 0.78, dist);
+        alpha *= edgeWin;
+        rgb = min(rgb, float3(1.3));
         return float4(rgb * alpha, alpha);
     }
     """

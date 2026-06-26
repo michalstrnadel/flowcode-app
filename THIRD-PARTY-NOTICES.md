@@ -62,6 +62,19 @@ them to be installed and running on `127.0.0.1` (see the README and `scripts/set
 The two services are most easily installed via the voicemode service installer
 (`voicemode service install kokoro|whisper`), which sets up the launchd agents.
 
+### Czech voice (optional, downloaded on demand)
+
+The optional Czech read-aloud voice runs as a local HTTP server that flowcode starts on
+demand (`scripts/czech-voice.sh`). flowcode-app does **not** bundle any of the following; it
+fetches them via `uv`/`uvx` only after the user explicitly chooses Czech:
+
+- **Coqui TTS** (`coqui-tts`, the maintained fork) — the TTS engine and `tts-server`.
+  Mozilla Public License 2.0.
+- **Czech voice model** `tts_models/cs/cv/vits` — a VITS model trained on
+  [Common Voice](https://commonvoice.mozilla.org/) (Common Voice data is CC0). Downloaded
+  into Coqui's cache; review its model card before redistributing the weights.
+- **PyTorch / torchaudio** (Meta) — BSD-3-Clause; pulled in as Coqui's runtime.
+
 ---
 
 ## Planned / distribution-time dependencies

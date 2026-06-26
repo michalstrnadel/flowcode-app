@@ -4,7 +4,7 @@
 
 <h1 align="center">flowcode 🔊 — the voice of Claude Code</h1>
 
-<p align="center"><em>Talk to Claude Code. Hear it talk back. Fully local, on your Mac.</em></p>
+<p align="center"><em>Talk to Claude. Hear it talk back. In English or Czech. Fully local, on your Mac.</em></p>
 
 <p align="center">
   <a href="https://github.com/michalstrnadel/flowcode-app/actions/workflows/ci.yml"><img src="https://github.com/michalstrnadel/flowcode-app/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -18,9 +18,10 @@
 ---
 
 flowcode is a tiny native macOS **menu-bar app** that gives [Claude Code](https://claude.com/claude-code)
-a voice. It reads each new assistant reply **aloud** (local Kokoro TTS) and lets you **dictate**
-prompts by holding a key (local Whisper STT) — while a luminous, audio-reactive orb reacts to the
-conversation. Claude Code itself runs completely unmodified; flowcode just sits beside it.
+— and the **Claude desktop app** (Chat, Cowork, Code) — a voice. It reads each new assistant reply
+**aloud** (local Kokoro TTS) and lets you **dictate** prompts by holding a key (local Whisper STT) —
+while a luminous, audio-reactive orb reacts to the conversation. Claude runs completely unmodified;
+flowcode just sits beside it. **English out of the box; Czech is one click away.**
 
 No cloud. No account. No plugin. Your voice and Claude's words never leave your Mac.
 
@@ -30,7 +31,13 @@ No cloud. No account. No plugin. Your voice and Claude's words never leave your 
   pulsing to the speech. Tool-call narration and code blocks are skipped — you hear the prose, not the plumbing.
 - 🎙️ **Push-to-talk dictation** — hold **Right Option (⌥)**, speak, release. Your words are
   transcribed by local **Whisper** and pasted into whatever app is focused (your terminal, an editor,
-  anywhere). It never presses Enter — *you* commit.
+  the Claude desktop app, anywhere). It never presses Enter — *you* commit.
+- 💻 **Claude Code *and* Claude Desktop** — reads the Claude desktop app's replies aloud too (Chat,
+  Cowork, Code), and dictates into it. Choose **Listen to ▸ Claude Code / Claude Desktop / Both**.
+- 🌍 **English & Czech** — **Language ▸ English / Čeština**. Czech read-aloud uses an on-demand neural
+  voice that downloads only when you ask for it; English never downloads anything.
+- 🗜️ **Read-aloud modes** — **Read replies ▸ Off / Full / Compact**. *Compact* speaks just the gist
+  (first + last sentence) when a reply runs long.
 - ⏯️ **Pause / Resume** the whole voice layer with **⌃⌥Space** or the menu — the mic is released the
   moment you're not dictating.
 - ✦ **Orb HUD** — a luminous, audio-reactive orb that shows when flowcode is listening,
@@ -46,9 +53,11 @@ No cloud. No account. No plugin. Your voice and Claude's words never leave your 
 | | |
 |---|---|
 | 🤖 **Claude Code** | Any session, completely unmodified — flowcode reads the transcript it already writes. |
-| 🗣️ **Kokoro TTS** | Local text-to-speech (`127.0.0.1:8880`) — read-aloud, with a pickable voice. |
-| ✍️ **Whisper STT** | Local speech-to-text (`127.0.0.1:2022`) — push-to-talk dictation. |
-| 💻 **macOS 14+** | Apple Silicon & Intel. Menu-bar agent, no Dock icon. |
+| 💻 **Claude Desktop** | Reads Chat / Cowork / Code replies aloud (via the Accessibility tree) and dictates into them. |
+| 🗣️ **Kokoro TTS** | Local English text-to-speech (`127.0.0.1:8880`) — read-aloud, with a pickable voice. |
+| 🇨🇿 **Czech (optional)** | On-demand neural voice (Coqui VITS) + multilingual Whisper — downloaded only when you pick Czech. |
+| ✍️ **Whisper STT** | Local speech-to-text (`127.0.0.1:2022`) — push-to-talk dictation, English & Czech. |
+| 🖥️ **macOS 14+** | Apple Silicon & Intel. Menu-bar agent, no Dock icon. |
 | ⌨️ **Your terminal / editor** | Warp, Terminal, iTerm2, VS Code… dictation pastes into the focused app. |
 
 ## Quick start
@@ -72,12 +81,21 @@ launchd agents, builds + signs the app, and opens the right System Settings pane
 
 | Feature | Microphone | Accessibility |
 | --- | :---: | :---: |
-| **Read-aloud** | — | — |
+| **Read-aloud (Claude Code)** | — | — |
+| **Read-aloud (Claude Desktop)** | — | ✅ (to read its on-screen text) |
 | **Dictation** (⌥) | ✅ | ✅ (to paste the transcript) |
 
-Read-aloud works immediately with **no** permissions. Dictation needs both; flowcode prompts the
-first time you hold ⌥. (macOS can't grant these from a script — you flip the toggles in System
-Settings → Privacy & Security.)
+Claude Code read-aloud works immediately with **no** permissions. Dictation and Claude Desktop
+read-aloud need **Accessibility** (the same single grant); dictation also needs the **Microphone**.
+flowcode prompts the first time you hold ⌥. (macOS can't grant these from a script — you flip the
+toggles in System Settings → Privacy & Security.)
+
+### Czech voice (optional)
+
+Pick **Language ▸ Čeština** in the menu and flowcode offers to download a neural Czech voice
+(~350 MB, one-time, fully offline) — English users never download it. Prefer the CLI? Run
+`scripts/setup.sh --czech` or the **`/czech-voice`** skill. Czech dictation works with the
+multilingual Whisper model (`small` by default; `setup.sh --model medium` for higher accuracy).
 
 ## The menu
 
@@ -87,11 +105,14 @@ Settings → Privacy & Security.)
 Pause Voice            ⌃⌥Space        ↔ Resume Voice
 Stop Speaking                          (enabled while speaking)
 ─────────
-✓ Read messages aloud                  (relaunch to apply)
-  Voice ▸  Sky · Bella · Adam · …      (pick a Kokoro voice)
+  Read replies ▸  Full · Compact · Off  (how much to speak; live)
+  Voice ▸  Sky · Bella · Adam · …       (pick a Kokoro voice — English)
+  Language ▸  English · Čeština         (read-aloud + dictation; live)
+  Listen to ▸  Claude Code · Claude Desktop · Both
   Hold Right Option (⌥) to dictate
 ─────────
-✓ Launch at Login                      (real SMAppService login item)
+✓ Read messages aloud                   (experimental switch; relaunch to apply)
+✓ Launch at Login                       (real SMAppService login item)
   Open Log…
 ─────────
 Quit flowcode          ⌘Q
@@ -100,14 +121,23 @@ Quit flowcode          ⌘Q
 ## How it works
 
 ```
-Claude Code session JSONL ──tail──▶ flowcode ──HTTP──▶ Kokoro TTS (:8880) ──▶ 🔊 + orb
+Claude Code JSONL ─tail─┐
+                        ├─▶ flowcode ─HTTP─▶ Kokoro :8880 (EN) / Coqui :8771 (CS) ─▶ 🔊 + orb
+Claude Desktop  AX ─────┘
         ⌥ hold ──▶ mic capture ──HTTP──▶ Whisper STT (:2022) ──paste──▶ focused app
 ```
 
-flowcode tails the transcript Claude Code already writes (`~/.claude*/projects/…/<session>.jsonl`)
-and speaks each new assistant message from the **active** session. The mic opens **only** while you
-hold ⌥, and closes the instant you let go. No socket, no Python core, no MCP server — read-aloud and
-dictation are entirely self-contained in the Swift app plus the two local services.
+flowcode reads from one or both **sources**: it tails the transcript Claude Code already writes
+(`~/.claude*/projects/…/<session>.jsonl`, active session only), and/or observes the Claude desktop
+app's on-screen replies via the macOS **Accessibility** tree (it keeps conversations server-side, so
+there's no file to tail). Each new reply is spoken by Kokoro (English) or the on-demand Coqui voice
+(Czech). The mic opens **only** while you hold ⌥, and closes the instant you let go. No socket, no
+Python core, no MCP server — read-aloud and dictation are self-contained in the Swift app plus the
+local voice services.
+
+> **Reading the Claude desktop app is best-effort.** It scrapes the app's Accessibility tree, which a
+> future Claude UI update could change. If it misbehaves, switch **Listen to → Claude Code** or
+> **Read replies → Off**; the Claude Code path is unaffected.
 
 ## Troubleshooting
 

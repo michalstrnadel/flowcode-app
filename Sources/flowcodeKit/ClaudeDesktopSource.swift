@@ -93,6 +93,136 @@ public struct MessageSettler {
     }
 }
 
+// MARK: - MessageStreamer (pure, unit-tested core — live block streaming)
+
+/// The streaming counterpart to `MessageSettler`, used for Full read-aloud: instead of
+/// waiting for the WHOLE reply to settle, it emits each finished *block* (paragraph /
+/// list / heading) as soon as a later block confirms it's done — so flowcode speaks as
+/// Claude writes. Pure and deterministic (time and the block list are injected) so it's
+/// unit-testable without the Claude app. See `flowcode-selftest`.
+///
+/// Design (from the streaming/Compact research + adversarial review):
+///   • Block boundaries are STRUCTURAL (from the AX tree), never punctuation — so it can
+///     never split mid-sentence / inside "e.g." / "U.S." / a decimal / a colon list.
+///   • Dedup is by CONTENT HASH, not a character offset, so AX markdown reflow can never
+///     cause a re-speak (at worst a dropped block — silence is safer than repetition).
+///   • A block that simply GREW (a mid-stream pause flushed it early, then more text
+///     arrived) emits only the new suffix — no double-speak.
+///   • It NEVER speaks a message it hasn't seen stream in: a user's own prompt / transient
+///     "Thinking…" text appears fully-formed as a single static block and never grows, so it
+///     stays silent. Observed growth — or any multi-block reply — marks genuine output.
+public struct MessageStreamer {
+
+    /// A block must be stable this long before it's spoken (one-tick reflow/transient guard).
+    public let blockSettle: Double
+    /// The trailing / only block is flushed once the whole reply is stable this long.
+    public let messageSettle: Double
+
+    private var baselined = false
+    private var spoken = Set<Int>()          // hashes of blocks already emitted (reflow-safe dedup)
+    private var prevBlocks: [String] = []
+    private var seenAt: [Int: Double] = [:]  // block hash → first time seen (per-block stability)
+    private var lastArrayChange = 0.0        // when the block list last changed (whole-message settle)
+    private var lastTail = ""                // last emitted trailing block (prefix-growth suffix emit)
+    private var hasEmitted = false           // emitted at least one block of the current message?
+    private var observedGrowth = false       // has the current message been seen streaming in?
+
+    public init(blockSettle: Double = 0.25, messageSettle: Double = 0.5) {
+        self.blockSettle = blockSettle
+        self.messageSettle = messageSettle
+    }
+
+    /// Feed the current ordered blocks of the last message and a monotonic `now` (seconds).
+    /// Returns the blocks to speak this tick (in document order), or `[]`.
+    public mutating func update(blocks rawBlocks: [String], now: Double) -> [String] {
+        let blocks = rawBlocks
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        // First sample = baseline. Whatever is already on screen is "history": record its
+        // hashes so pre-existing chat is never replayed.
+        if !baselined {
+            baselined = true
+            prevBlocks = blocks
+            lastArrayChange = now
+            for b in blocks { let h = b.hashValue; spoken.insert(h); seenAt[h] = now }
+            lastTail = blocks.last ?? ""
+            return []
+        }
+
+        if blocks != prevBlocks {
+            lastArrayChange = now
+            // Same message if the leading block is unchanged OR merely grew (a single block
+            // streaming in changes `first` but is NOT a new reply). Different lead → new reply.
+            let newMessage = !sameLeadBlock(blocks.first, prevBlocks.first)
+            if newMessage {
+                // A different leading block → a new reply. Re-arm the first-block guards.
+                hasEmitted = false
+                observedGrowth = false
+                lastTail = ""
+            } else if joinedCount(blocks) > joinedCount(prevBlocks) {
+                // Same message, content grew → the assistant is streaming it in.
+                observedGrowth = true
+            }
+            for b in blocks where seenAt[b.hashValue] == nil { seenAt[b.hashValue] = now }
+            prevBlocks = blocks
+        }
+
+        guard !blocks.isEmpty else { return [] }
+
+        // Never speak a message we haven't seen stream in: a user's own prompt or a transient
+        // "Thinking…" line appears fully-formed as a single static block and never grows. A
+        // reply we've watched grow — or any multi-block reply — is genuine assistant output.
+        let canStart = hasEmitted || observedGrowth || blocks.count >= 2
+        guard canStart else { return [] }
+
+        var emitted: [String] = []
+        let messageStable = now - lastArrayChange >= messageSettle
+        for (i, b) in blocks.enumerated() {
+            let h = b.hashValue
+            if spoken.contains(h) { continue }                 // already emitted exactly
+            let isLast = (i == blocks.count - 1)
+
+            // A non-last block is confirmed done (Claude moved on); the last/only block
+            // waits for the whole message to settle. Either way require one tick of block
+            // stability (reflow guard). The canStart gate above already rejected a
+            // non-streaming single block (a user prompt / transient text).
+            let confirmed = !isLast || messageStable
+            let stable = now - (seenAt[h] ?? now) >= blockSettle
+
+            // Preserve order: stop at the first block that isn't ready yet.
+            guard confirmed && stable else { break }
+
+            // If this block extends the last one we spoke (a pause flushed it early, then it
+            // grew), speak only the new suffix — trimming any leading joiner punctuation.
+            let toSpeak: String
+            if !lastTail.isEmpty, b.hasPrefix(lastTail) {
+                toSpeak = String(b.dropFirst(lastTail.count))
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " \t\n,;:—–-"))
+            } else {
+                toSpeak = b
+            }
+
+            spoken.insert(h)
+            lastTail = b
+            hasEmitted = true
+            if !toSpeak.isEmpty { emitted.append(toSpeak) }
+        }
+        return emitted
+    }
+
+    private func joinedCount(_ blocks: [String]) -> Int {
+        blocks.reduce(0) { $0 + $1.count }
+    }
+
+    /// Two leading blocks belong to the same message if one is a prefix of the other (a
+    /// single block streaming in grows `first` without it being a new reply).
+    private func sameLeadBlock(_ a: String?, _ b: String?) -> Bool {
+        guard let a, let b else { return false }
+        return a == b || a.hasPrefix(b) || b.hasPrefix(a)
+    }
+}
+
 // MARK: - ClaudeDesktopSource
 
 @MainActor
@@ -100,27 +230,47 @@ public final class ClaudeDesktopSource: AssistantTextSource {
 
     public var onAssistantText: ((String) -> Void)?
 
+    /// Claude desktop app bundle id. Public so the controller can coordinate sources
+    /// (mute the Claude Code JSONL reader while a Claude Desktop window is frontmost).
+    nonisolated public static let bundleID = "com.anthropic.claudefordesktop"
+
     private let bundleID: String
     private var timer: Timer?
-    private var settler = MessageSettler()
+    private var settler = MessageSettler(settleInterval: 0.5)
+    private var streamer = MessageStreamer(blockSettle: 0.2, messageSettle: 0.35)
+    /// Full mode → stream finished blocks live; Compact/Off → settle the whole message.
+    private var streaming = false
 
     // Cached AX handles (re-resolved when they go stale).
     private var axApp: AXUIElement?
     private var cachedPID: pid_t = -1
     private var didLogAXIssue = false
 
-    public init(bundleID: String = "com.anthropic.claudefordesktop") {
+    public init(bundleID: String = ClaudeDesktopSource.bundleID) {
         self.bundleID = bundleID
     }
 
     public func start() {
         stop()
-        settler = MessageSettler()   // re-baseline so pre-existing chat is never replayed
+        rebaseline()                 // re-baseline so pre-existing chat is never replayed
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    /// Switch live block-streaming (Full) on/off. Re-baselines so an in-flight reply on the
+    /// old path is never re-spoken on the new one (matches resume() semantics).
+    public func setStreaming(_ on: Bool) {
+        guard on != streaming else { return }
+        streaming = on
+        rebaseline()
+    }
+
+    private func rebaseline() {
+        settler = MessageSettler(settleInterval: 0.5)
+        streamer = MessageStreamer(blockSettle: 0.2, messageSettle: 0.35)
     }
 
     public func stop() {
@@ -145,10 +295,19 @@ public final class ClaudeDesktopSource: AssistantTextSource {
             logAXOnce("could not find the Claude web view in the AX tree")
             return
         }
-        let text = lastMessageText(in: web)
-        guard !text.isEmpty else { return }
-        if let toSpeak = settler.update(current: text, now: ProcessInfo.processInfo.systemUptime) {
-            onAssistantText?(toSpeak)
+        let now = ProcessInfo.processInfo.systemUptime
+        if streaming {
+            // Full mode: speak each finished block as the reply streams in.
+            let blocks = lastMessageBlocks(in: web)
+            guard !blocks.isEmpty else { return }
+            for block in streamer.update(blocks: blocks, now: now) { onAssistantText?(block) }
+        } else {
+            // Compact / Off: wait for the whole message, then hand it over as one string.
+            let text = lastMessageText(in: web)
+            guard !text.isEmpty else { return }
+            if let toSpeak = settler.update(current: text, now: now) {
+                onAssistantText?(toSpeak)
+            }
         }
     }
 
@@ -161,7 +320,19 @@ public final class ClaudeDesktopSource: AssistantTextSource {
         let el = AXUIElementCreateApplication(running.processIdentifier)
         axApp = el
         cachedPID = running.processIdentifier
+        enableChromiumAX(el)
         return el
+    }
+
+    /// Electron/Chromium apps (Claude Desktop) build their web accessibility tree ONLY when
+    /// an assistive client asks for it. Without this the AX tree is just empty AXGroups — no
+    /// conversation text. Setting these attributes makes Claude expose its web content. The
+    /// tree populates asynchronously (Chromium rebuilds it), so the first read or two after a
+    /// fresh launch may still be sparse. Set once per app instance (re-runs when the pid
+    /// changes because resolveApp only reaches here on a new element).
+    private func enableChromiumAX(_ app: AXUIElement) {
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
     }
 
     private func focusedWindow(of app: AXUIElement) -> AXUIElement? {
@@ -174,37 +345,87 @@ public final class ClaudeDesktopSource: AssistantTextSource {
 
     // MARK: - Tree walking
 
-    /// Depth-first search for the first Chromium web view (`AXWebArea`).
-    private func findWebArea(_ el: AXUIElement, depth: Int = 0) -> AXUIElement? {
-        if depth > 80 { return nil }
-        if role(of: el) == "AXWebArea" { return el }
-        for child in children(of: el) {
-            if let found = findWebArea(child, depth: depth + 1) { return found }
-        }
-        return nil
+    /// The Chromium web view holding the conversation. Claude Desktop exposes MORE than one
+    /// `AXWebArea` (e.g. an empty/sidebar one plus the main content), so pick the one with the
+    /// most text rather than the first in document order.
+    private func findWebArea(_ root: AXUIElement) -> AXUIElement? {
+        var areas: [AXUIElement] = []
+        collectWebAreas(root, depth: 0, into: &areas)
+        guard !areas.isEmpty else { return nil }
+        if areas.count == 1 { return areas[0] }
+        return areas.max { collectStaticText($0).count < collectStaticText($1).count }
     }
 
-    /// Text of the last message block in the conversation. Walking the children of the
-    /// scroll area (the message list) from the end and taking the first text-bearing
-    /// subtree usually lands on the latest assistant reply (the user's prompt is an
-    /// earlier sibling). Falls back to the whole web area's text if structure differs.
+    private func collectWebAreas(_ el: AXUIElement, depth: Int, into acc: inout [AXUIElement]) {
+        if depth > 80 { return }
+        if role(of: el) == "AXWebArea" { acc.append(el) }   // don't recurse into nested web areas
+        else { for child in children(of: el) { collectWebAreas(child, depth: depth + 1, into: &acc) } }
+    }
+
+    /// Text of the latest assistant reply. Claude Desktop tags each turn with an
+    /// `AXHeading` — "You said: …" for the user, "Claude responded: …" for the assistant —
+    /// so we anchor on the LAST "Claude responded:" heading and read its sibling blocks.
+    /// This structurally excludes the user's own prompt and the conversation sidebar.
+    /// Falls back to the old last-text-child heuristic if the heading isn't present.
     private func lastMessageText(in web: AXUIElement) -> String {
-        let container = firstScrollArea(web) ?? web
-        let kids = children(of: container)
-        for child in kids.reversed() {
-            let t = collectStaticText(child)
-            if t.count >= 12 { return t }
-        }
-        return collectStaticText(container)
+        guard let container = latestAssistantContainer(in: web) else { return "" }
+        return assistantBlocks(container).joined(separator: " ")
     }
 
-    private func firstScrollArea(_ el: AXUIElement, depth: Int = 0) -> AXUIElement? {
-        if depth > 80 { return nil }
-        if role(of: el) == "AXScrollArea" { return el }
-        for child in children(of: el) {
-            if let found = firstScrollArea(child, depth: depth + 1) { return found }
+    /// The assistant heading carries this prefix in Claude Desktop (English UI).
+    private let assistantHeadingPrefix = "Claude responded"
+
+    /// The container subtree of the latest assistant reply: the parent of the last
+    /// `AXHeading` whose text starts with "Claude responded".
+    private func latestAssistantContainer(in web: AXUIElement) -> AXUIElement? {
+        var headings: [AXUIElement] = []
+        collectAssistantHeadings(web, depth: 0, into: &headings)
+        guard let last = headings.last else { return nil }
+        return copyElement(last, kAXParentAttribute)
+    }
+
+    private func collectAssistantHeadings(_ el: AXUIElement, depth: Int, into acc: inout [AXUIElement]) {
+        if depth > 80 { return }
+        if role(of: el) == "AXHeading" {
+            let t = string(of: el, kAXValueAttribute) ?? string(of: el, kAXTitleAttribute) ?? ""
+            if t.hasPrefix(assistantHeadingPrefix) { acc.append(el) }
         }
-        return nil
+        for child in children(of: el) { collectAssistantHeadings(child, depth: depth + 1, into: &acc) }
+    }
+
+    /// The reply's structural blocks (paragraph, list, …) in order, skipping the
+    /// "Claude responded:" heading label itself. `AXListMarker` ("•") is a non-static-text
+    /// role so `collectStaticText` already drops it.
+    private func assistantBlocks(_ container: AXUIElement) -> [String] {
+        var blocks: [String] = []
+        for child in children(of: container) {
+            if role(of: child) == "AXHeading" { continue }   // the "Claude responded:" label
+            let t = collectStaticText(child)
+            if t.isEmpty || isTimestamp(t) { continue }      // drop the relative-time stamp
+            blocks.append(t)
+        }
+        return blocks
+    }
+
+    /// True for the relative-time stamp Claude appends to each reply ("just now", "3m ago",
+    /// "před 5 minutami", …). It must NOT be spoken, and because it ticks over time it would
+    /// otherwise look like the reply changed and trigger a spurious re-read.
+    private func isTimestamp(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if t.isEmpty { return true }
+        if ["just now", "now", "yesterday", "today", "právě teď", "teď", "včera", "dnes"].contains(t) { return true }
+        if t.range(of: #"^\d+\s*[a-zá-ž]+\s+ago$"#, options: .regularExpression) != nil { return true }   // "5m ago", "2 hours ago"
+        if t.range(of: #"^před\s+\d+.+$"#, options: .regularExpression) != nil { return true }              // "před 5 minutami"
+        return false
+    }
+
+    /// The last message as ORDERED structural blocks (paragraphs / list / heading), for
+    /// live streaming. Block boundaries come from the AX tree, not punctuation, so a block
+    /// is never split mid-sentence. Falls back to a single block (→ behaves like the
+    /// whole-message settler) when no useful structure is found.
+    private func lastMessageBlocks(in web: AXUIElement) -> [String] {
+        guard let container = latestAssistantContainer(in: web) else { return [] }
+        return assistantBlocks(container)
     }
 
     /// Concatenate the visible text of all `AXStaticText` nodes under `el` (document

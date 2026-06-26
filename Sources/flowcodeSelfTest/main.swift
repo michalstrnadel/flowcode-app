@@ -293,6 +293,51 @@ func messageSettlerChecks() {
     checks.check(s2.update(current: "Existing history here.", now: 1.0) == nil, "pre-existing text baselined, not spoken")
 }
 
+// MARK: - claude desktop block streaming (pure, no AX)
+
+func messageStreamerChecks() {
+    print("== claude desktop streamer ==")
+    // defaults: blockSettle 0.25, messageSettle 0.5, firstSettle 0.8
+    var st = MessageStreamer()
+    _ = st.update(blocks: [], now: 0)                                           // baseline
+
+    // A reply streams in. First block stays held until a later block confirms it's done.
+    checks.check(st.update(blocks: ["Hello there."], now: 0.1) == [], "stream: single growing block held (no later block yet)")
+    checks.check(st.update(blocks: ["Hello there.", "How are"], now: 0.4) == ["Hello there."],
+                 "stream: emit a block once a later block confirms it (one tick stable)")
+    checks.check(st.update(blocks: ["Hello there.", "How are you?"], now: 0.7) == [],
+                 "stream: trailing block held until the message settles")
+    checks.check(st.update(blocks: ["Hello there.", "How are you?"], now: 1.3) == ["How are you?"],
+                 "stream: trailing block flushed on settle")
+    checks.check(st.update(blocks: ["Hello there.", "How are you?"], now: 2.0) == [],
+                 "stream: no re-emit of already-spoken blocks")
+
+    // A user's prompt (single static block that never streams in) is NEVER spoken.
+    var st2 = MessageStreamer()
+    _ = st2.update(blocks: ["Old conversation block."], now: 0)
+    checks.check(st2.update(blocks: ["What is two plus two?"], now: 0.1) == [], "stream: static prompt not spoken (no growth)")
+    checks.check(st2.update(blocks: ["What is two plus two?"], now: 1.0) == [], "stream: static single block stays unspoken past firstSettle")
+
+    // A block flushed early (mid-stream pause) then growing emits only the new suffix — no double-speak.
+    var st3 = MessageStreamer()
+    _ = st3.update(blocks: [], now: 0)
+    _ = st3.update(blocks: ["The answer is"], now: 0.1)
+    _ = st3.update(blocks: ["The answer is four"], now: 0.4)                    // observed growth → streaming
+    checks.check(st3.update(blocks: ["The answer is four"], now: 1.0) == ["The answer is four"],
+                 "stream: single streamed block flushed on settle")
+    _ = st3.update(blocks: ["The answer is four, definitely."], now: 1.8)       // grew after early flush
+    let suffix = st3.update(blocks: ["The answer is four, definitely."], now: 2.5)
+    checks.check(suffix.count == 1 && suffix[0].contains("definitely") && !suffix[0].contains("The answer"),
+                 "stream: grown block emits only the new suffix (no double-speak)")
+
+    // Multi-block reply is genuine assistant output even without observed growth (count ≥ 2).
+    var st4 = MessageStreamer()
+    _ = st4.update(blocks: [], now: 0)
+    _ = st4.update(blocks: ["First paragraph.", "Second paragraph."], now: 0.1) // first seen
+    checks.check(st4.update(blocks: ["First paragraph.", "Second paragraph."], now: 0.4) == ["First paragraph."],
+                 "stream: multi-block reply starts without waiting for observed growth")
+}
+
 func speechTextChecks() {
     print("== speech text (model B) ==")
     let parts = SpeechText.sentences(
@@ -303,14 +348,41 @@ func speechTextChecks() {
     let codeOnly = SpeechText.sentences(from: "```\nlet x = 1\n```")
     checks.check(codeOnly.isEmpty, "code-only message yields nothing to speak")
 
-    // Compact ("gist") mode: keep only the first + last sentence of a long reply.
-    let compact = SpeechText.compact("One here. Two middle. Three middle. Four last.")
-    checks.check(compact.contains("One here.") && compact.contains("Four last."),
-                 "compact keeps first + last sentence")
-    checks.check(!compact.contains("Two middle.") && !compact.contains("Three middle."),
-                 "compact drops the middle")
-    let shortKept = SpeechText.compact("Only one sentence here.")
-    checks.check(shortKept.contains("Only one sentence here."), "compact returns short replies whole")
+    // Emoji / pictographs / arrows are stripped so TTS never says "party popper"; Czech
+    // diacritics are untouched. (Regression guard for the CharacterSet.letters/U+FE0F trap.)
+    let glyphy = SpeechText.clean("🎉 Hotovo! Vše funguje ✅ a je to hotové. ⚠️ Pozor → konec.")
+    checks.check(!glyphy.contains("🎉") && !glyphy.contains("✅") && !glyphy.contains("⚠")
+                 && !glyphy.contains("→") && !glyphy.unicodeScalars.contains("\u{FE0F}"),
+                 "clean() strips emoji / pictographs / arrows / variation selectors")
+    checks.check(glyphy.contains("Hotovo") && glyphy.contains("hotové") && glyphy.contains("Pozor"),
+                 "clean() keeps Czech text + diacritics around stripped glyphs")
+
+    // Compact ("gist") mode — structure-aware extractive (not first+last).
+    let short = SpeechText.compact("Only one sentence here.")
+    checks.check(short.contains("Only one sentence here."), "compact: short unstructured reply spoken whole")
+
+    let listReply = """
+    ## Summary
+    Here is the status.
+    - Self-trigger is fixed.
+    - Czech STT is garbled on the base model.
+    - Latency is about one second.
+    Want me to tune it further?
+    """
+    let gist = SpeechText.compact(listReply)
+    checks.check(gist.contains("Self-trigger") && gist.contains("garbled"),
+                 "compact: keeps whole bullet content (not first-clause fragments)")
+    checks.check(!gist.contains("Summary"), "compact: drops heading labels")
+    checks.check(gist.contains("?"), "compact: keeps the trailing question as the closer")
+    checks.check(gist.count < SpeechText.clean(listReply).count, "compact: shorter than the full reply")
+
+    // A tool-narration opener is demoted, not spoken as the gist.
+    let narration = SpeechText.compact(
+        "Let me read the file. The bug is in the parser. I fixed it and the tests pass now.")
+    checks.check(!narration.hasPrefix("Let me read"), "compact: demotes a tool-narration opener")
+
+    // Code-only message still yields nothing (no 'here is the code' spoken in isolation).
+    checks.check(SpeechText.compact("```\nlet x = 1\n```").isEmpty, "compact: code-only → empty")
 
     // Czech diacritics must survive cleaning + sentence splitting.
     let cz = SpeechText.sentences(from: "Příliš žluťoučký kůň. Úpěl ďábelské ódy.").joined(separator: " ")
@@ -353,6 +425,7 @@ modelBChecks()
 speechTextChecks()
 languageProfileChecks()
 messageSettlerChecks()
+messageStreamerChecks()
 watchdogChecks()
 print(checks.failures == 0 ? "\nALL PASS" : "\n\(checks.failures) FAILURE(S)")
 exit(checks.failures == 0 ? 0 : 1)

@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import flowcodeKit
 
 /// Wires the flowcode menu-bar app together: the observable stores, the IPC client
@@ -67,6 +68,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Global pause/resume hotkey (⌃⌥Space). Carbon RegisterEventHotKey needs no
             // Accessibility grant, so it works even before the user grants dictation perms.
             pauseHotKeyHolder.installIfNeeded(combo: .pauseDefault) { [weak lv] in lv?.togglePause() }
+
+            // First-run nudge: dictation AND Claude Desktop read-aloud need the Accessibility
+            // grant. If it isn't granted, ask macOS to show its prompt once so THIS
+            // (correctly-signed) app registers itself in the list — the user just flips the
+            // toggle, no dragging the app in or hunting stale entries.
+            if !AXIsProcessTrusted() {
+                // Literal avoids referencing the non-Sendable global kAXTrustedCheckOptionPrompt
+                // (its value is exactly this string).
+                let opts = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+                _ = AXIsProcessTrustedWithOptions(opts)
+            }
         } else {
             // ---- Socket path: external voice core (voicemode MCP or spawned runner) ----
             // Request microphone access up front so the TCC grant attributes to flowcode.

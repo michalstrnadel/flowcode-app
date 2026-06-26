@@ -6,6 +6,36 @@ All notable changes to flowcode are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-26
+
+### Added
+- **Claude Desktop read-aloud now actually works.** Electron/Chromium apps don't expose their web
+  content to Accessibility until a client asks, so flowcode now sets `AXManualAccessibility` on the
+  Claude app — previously the AX path read an empty tree and nothing was spoken (what you heard was
+  always the Claude Code transcript). The latest reply is located by anchoring on Claude's own
+  per-turn headings ("Claude responded:" vs "You said:"), so it reads exactly the assistant reply —
+  never the sidebar, never your own prompt.
+- **Block-streaming infrastructure** (Full mode): a tested `MessageStreamer` speaks finished blocks
+  as they appear — content-hash de-dup (no re-speak on reflow), prefix-growth suffix emit, and a
+  guard that only speaks a reply it has seen stream in. It streams where the app exposes the reply
+  incrementally; **Claude Code in the desktop app commits its reply to the tree only at completion**,
+  so there it reads the whole reply once finished (cleanly, low-latency) rather than word-by-word.
+- **Source coordination:** when a Claude Desktop window is frontmost the AX source reads it and the
+  Claude Code JSONL reader stays quiet, so a reply is never read twice.
+
+### Changed
+- **Compact read-aloud is now structure-aware** (was first + last sentence): it speaks the reply's
+  actual points — whole bullets / paragraphs — drops code blocks, tables, headings and rules,
+  demotes tool-narration openers ("Let me read…", "Tady to máš…"), keeps a trailing question as
+  the closer, and caps to a short budget so it stays a gist. Still fully offline, instant, and
+  diacritic-safe (Czech and English).
+- Read-aloud now **strips emoji, pictographs and arrows** before speaking (Full and Compact), so
+  TTS no longer vocalises "party popper" or hiccups on an emoji variation selector.
+
+### Fixed
+- The relative-time stamp Claude appends to each reply ("just now", "3m ago", …) is no longer read
+  aloud, and — because it ticks over time — no longer triggers a spurious re-read every minute.
+
 ## [0.1.0] — 2026-06-26
 
 First public release. 🎉
@@ -53,5 +83,6 @@ First public release. 🎉
 - The real-time voice core (barge-in / converse / swarm) is present but **experimental and off by
   default**; the shipping experience is read-aloud + dictation.
 
-[Unreleased]: https://github.com/michalstrnadel/flowcode-app/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/michalstrnadel/flowcode-app/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/michalstrnadel/flowcode-app/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/michalstrnadel/flowcode-app/releases/tag/v0.1.0

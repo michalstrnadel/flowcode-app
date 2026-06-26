@@ -15,6 +15,7 @@
 //  HUD already observes (store.lastRMS + store.sessionActive + store.state).
 //
 
+import AppKit
 import Foundation
 
 @MainActor
@@ -93,7 +94,23 @@ public final class LocalVoiceController {
 
     /// Bind every source's callback to speak() and start it. Re-callable (resume / source swap).
     private func startSources() {
-        for s in sources { s.onAssistantText = { [weak self] text in self?.speak(text) } }
+        for s in sources {
+            let isDesktop = (s is ClaudeDesktopSource)
+            s.onAssistantText = { [weak self] text in
+                guard let self else { return }
+                // Coordination (Both mode): when a Claude Desktop window is frontmost, the AX
+                // source owns read-aloud (it can stream); the Claude Code JSONL reader stays
+                // quiet so the SAME reply isn't read twice. When Claude Desktop is NOT frontmost,
+                // the JSONL reader handles terminal Claude Code and the desktop source is already
+                // inert (it's frontmost-gated). Net: exactly one source speaks any given reply.
+                let desktopFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == ClaudeDesktopSource.bundleID
+                if isDesktop ? desktopFront : !desktopFront { self.speak(text) }
+            }
+        }
+        // Full → stream finished blocks live (speak as Claude writes); Compact/Off settle
+        // the whole message. Only sources that observe streaming (Claude Desktop) act on it.
+        let stream = (readAloudMode == .full)
+        sources.forEach { $0.setStreaming(stream) }
         sources.forEach { $0.start() }
     }
 
@@ -183,6 +200,10 @@ public final class LocalVoiceController {
     public func setReadAloudMode(_ mode: ReadAloudMode) {
         readAloudMode = mode
         if mode == .off { flush() }   // silence anything already speaking
+        // Full streams finished blocks live; Compact/Off settle the whole message. Toggling
+        // re-baselines each source so an in-flight reply isn't re-spoken on the new path.
+        let stream = (mode == .full)
+        sources.forEach { $0.setStreaming(stream) }
     }
 
     private func rebuildEngine() {
@@ -242,19 +263,120 @@ public enum SpeechText {
         return splitFirstAggressively(sentences)
     }
 
-    /// Compact ("gist") read-aloud: for a long reply, speak only the FIRST and LAST
-    /// sentence — the opener (what it did) and the conclusion (the result) — and skip
-    /// the middle. Short replies (≤ 2 sentences) are returned whole. Offline + instant;
-    /// the on-screen text is always the full record. The result is fed back through
-    /// `sentences(from:)`, so cleaning/splitting still applies.
+    /// Compact ("gist") read-aloud: a short spoken digest of a long reply. Offline, instant,
+    /// purely extractive (it re-orders/trims Claude's OWN words — it never paraphrases). The
+    /// on-screen text is always the full record. Operates on the RAW markdown so it can use
+    /// the reply's own structure, then emits clean prose (re-fed through `sentences(from:)`).
+    ///
+    /// Strategy (from the smarter-Compact research + adversarial review):
+    ///   • short, unstructured replies → spoken whole (gated on LENGTH, not sentence count —
+    ///     the splitter over-segments on ":"/";");
+    ///   • otherwise: take the reply's blocks (whole bullets, paragraphs), DROP code fences,
+    ///     tables, headings and horizontal rules, DEMOTE a tool-narration opener ("Let me…",
+    ///     "Tady to máš…"), KEEP a trailing question/offer as the closer, cap to a few points
+    ///     and a hard char budget so it's genuinely shorter;
+    ///   • safety net: never silence and never ~the whole reply → fall back to first+last.
     public static func compact(_ raw: String) -> String {
-        let cleaned = clean(String(raw.prefix(maxChars * 4)))
-        guard !cleaned.isEmpty else { return "" }
-        let sentences = splitSentences(cleaned)
-        guard sentences.count > 2, let first = sentences.first, let last = sentences.last else {
-            return cleaned
+        let bounded = String(raw.prefix(maxChars * 4))
+        let cleanedFull = clean(bounded)
+        guard !cleanedFull.isEmpty else { return "" }
+
+        // Structured reply → extract from its own scaffolding; fall back to prose if that
+        // yields nothing usable.
+        if hasStructure(bounded), let gist = structuredGist(bounded), !gist.isEmpty {
+            return gist
         }
-        return first + " " + last
+        return proseGist(cleanedFull)
+    }
+
+    /// Gist of a structured reply: whole bullets / paragraphs, dropping code, tables,
+    /// headings and rules; a leading tool-narration line demoted; a trailing question kept
+    /// as the closer; capped to a few points and a hard char budget.
+    private static func structuredGist(_ bounded: String) -> String? {
+        var points: [String] = []
+        var inFence = false
+        for rawLine in bounded.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("```") { inFence.toggle(); continue }   // fenced code: never spoken
+            if inFence || line.isEmpty { continue }
+            if isTableRow(line) || isHeading(line) || isThematicBreak(line) { continue }
+            let text = clean(line)                                    // whole bullet/paragraph
+            if !text.isEmpty { points.append(text) }
+        }
+        guard !points.isEmpty else { return nil }
+
+        var closer: String?
+        if let last = points.last, isQuestionOrOffer(last) { closer = last; points.removeLast() }
+        if points.count > 1, let first = points.first, isNarration(first) { points.removeFirst() }
+
+        var spoken = Array(points.prefix(5))           // a gist is a few points, not everything
+        if let closer { spoken.append(closer) }
+        let gist = capToBudget(clean(spoken.joined(separator: " ")))
+        return gist.isEmpty ? nil : gist
+    }
+
+    /// Gist of unstructured prose: demote a tool-narration opener, speak short replies
+    /// whole, otherwise keep the opener + the conclusion (the improved first+last).
+    private static func proseGist(_ cleanedFull: String) -> String {
+        var sents = splitSentences(cleanedFull)
+        if sents.count > 1, let first = sents.first, isNarration(first) { sents.removeFirst() }
+        let text = sents.joined(separator: " ")
+        if text.count <= 200 || sents.count <= 2 { return text }     // short → whole
+        guard let first = sents.first, let last = sents.last else { return text }
+        return capToBudget(first + " " + last)
+    }
+
+    /// Trim to a spoken budget at a sentence boundary so compact stays meaningfully short.
+    private static func capToBudget(_ s: String, budget: Int = 700) -> String {
+        guard s.count > budget else { return s }
+        var acc = ""
+        for part in splitSentences(s) where acc.count + part.count + 1 <= budget {
+            acc += (acc.isEmpty ? "" : " ") + part
+        }
+        return acc.isEmpty ? String(s.prefix(budget)) : acc
+    }
+
+    // MARK: compact extraction helpers (offline, diacritic-safe)
+
+    /// True if the raw reply uses markdown structure (heading / list / quote / table / code).
+    static func hasStructure(_ raw: String) -> Bool {
+        raw.contains("```") || regexMatches(raw, #"(?m)^\s{0,3}(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\|)"#)
+    }
+
+    static func isHeading(_ line: String) -> Bool { regexMatches(line, #"^\s{0,3}#{1,6}\s"#) }
+
+    /// A markdown table row or separator (≥2 pipes), e.g. `| a | b |` or `|---|---|`.
+    static func isTableRow(_ line: String) -> Bool {
+        line.filter { $0 == "|" }.count >= 2
+    }
+
+    /// A horizontal rule / thematic break (`---`, `***`, `___`) — silence, not "dash dash".
+    static func isThematicBreak(_ line: String) -> Bool {
+        line.count >= 3 && line.allSatisfy { "-*_=".contains($0) }
+    }
+
+    /// A trailing question or offer to the user (kept as the compact closer). Bilingual,
+    /// matched diacritic-insensitively so Czech forms hit without listing every accent.
+    static func isQuestionOrOffer(_ s: String) -> Bool {
+        if s.hasSuffix("?") { return true }
+        return foldedMatches(s, #"\b(let me know|anything else|want me to|would you like|how do you want|shall i)\b"#)
+            || foldedMatches(s, #"\b(chces|chcete|muzes|muzete|nebo je to|jak chces|mam ti|mam to)\b"#)
+    }
+
+    /// A pure tool-narration / preamble opener with no result ("Let me read…", "Tady to máš…").
+    static func isNarration(_ s: String) -> Bool {
+        foldedMatches(s, #"^(let me|i'?ll|i will|let's|now i'?ll|now let|going to|first,? |next,? |i'?m going to)\b"#)
+            || foldedMatches(s, #"^(ted |teda |nechte |nechme |podivam se|spustim|projdu|tady to mas|pripravil jsem|jdu na)\b"#)
+    }
+
+    /// Regex test after case + diacritic folding (so ASCII patterns match Czech text).
+    static func foldedMatches(_ s: String, _ pattern: String) -> Bool {
+        regexMatches(s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil), pattern)
+    }
+
+    static func regexMatches(_ s: String, _ pattern: String) -> Bool {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return false }
+        return re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
     }
 
     /// If the first sentence is long, split it at its earliest clause boundary
@@ -297,9 +419,33 @@ public enum SpeechText {
         out = out.replacingOccurrences(of: "_", with: "")
         out = out.replacingOccurrences(of: "#", with: "")
         out = out.replacingOccurrences(of: "|", with: " ")           // table pipes
+        out = stripGlyphs(out)                                        // emoji / pictographs / arrows
         out = regexReplace(out, #"\s+"#, with: " ")                   // collapse whitespace
 
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Remove emoji, pictographs, dingbats, arrows, and the invisible joiners/selectors that
+    /// glue them together (U+FE0F variation selector, U+200D ZWJ). TTS otherwise vocalises
+    /// these ("party popper") or hiccups on a lone variation selector. Letters, digits, and
+    /// normal punctuation — including Czech diacritics — are untouched. (Don't use
+    /// CharacterSet.letters to detect glyphs: it reports U+FE0F as a letter.)
+    static func stripGlyphs(_ s: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for u in s.unicodeScalars {
+            if u == "\u{FE0F}" || u == "\u{200D}" { continue }       // VS16, ZWJ
+            if u.properties.isEmojiPresentation { continue }         // 🎉🌍📦🚀 (not digits/#/*)
+            let v = u.value
+            if (0x2190...0x21FF).contains(v)        // arrows
+                || (0x2300...0x27BF).contains(v)    // misc technical, dingbats (✅ ⚠ ❌ ✂ …)
+                || (0x2B00...0x2BFF).contains(v)    // misc symbols & arrows (⭐ ➡ …)
+                || (0x1F000...0x1FAFF).contains(v)  // emoji planes
+            {
+                continue
+            }
+            scalars.append(u)
+        }
+        return String(scalars)
     }
 
     private static func splitSentences(_ s: String) -> [String] {

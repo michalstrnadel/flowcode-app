@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 600" width="1280" height="600" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <radialGradient id="bg" cx="62%" cy="22%" r="95%">
+      <stop offset="0%" stop-color="#121a2e"/>
+      <stop offset="45%" stop-color="#0a0f1d"/>
+      <stop offset="100%" stop-color="#05070e"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7c5cff" stop-opacity="0.55"/>
+      <stop offset="40%" stop-color="#4aa6ff" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#4aa6ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orb" cx="42%" cy="38%" r="65%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="22%" stop-color="#d6f3ff"/>
+      <stop offset="52%" stop-color="#4fd6ff"/>
+      <stop offset="100%" stop-color="#7c5cff"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4fd6ff"/>
+      <stop offset="100%" stop-color="#9a7bff"/>
+    </linearGradient>
+    <linearGradient id="wordmark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#cfe4ff"/>
+    </linearGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="1280" height="600" fill="url(#bg)"/>
+  <!-- faint hairline grid -->
+  <g stroke="#5fa8ff" stroke-opacity="0.05" stroke-width="1">
+    <path d="M0 150 H1280 M0 300 H1280 M0 450 H1280"/>
+    <path d="M320 0 V600 M640 0 V600 M960 0 V600"/>
+  </g>
+
+  <!-- ===== left: wordmark + headline ===== -->
+  <!-- mini orb glyph -->
+  <circle cx="84" cy="92" r="16" fill="url(#glow)"/>
+  <circle cx="84" cy="92" r="9" fill="url(#orb)"/>
+  <text x="110" y="99" font-size="22" font-weight="700" fill="#eaf1fb" letter-spacing="0.5">flowcode</text>
+  <text x="216" y="99" font-size="15" font-weight="500" fill="#7f93b3" letter-spacing="0.3">· voice for Claude Code</text>
+
+  <text x="78" y="226" font-size="40" font-weight="800" fill="url(#wordmark)" letter-spacing="-0.5">The voice of</text>
+  <text x="78" y="286" font-size="40" font-weight="800" fill="url(#wordmark)" letter-spacing="-0.5">Claude Code<tspan fill="#4fd6ff">.</tspan></text>
+
+  <text x="80" y="344" font-size="19" font-weight="500" fill="#aebed7">Hear Claude's replies read aloud. Dictate prompts by</text>
+  <text x="80" y="372" font-size="19" font-weight="500" fill="#aebed7">voice. Fully local on your Mac — Claude Code unchanged.</text>
+
+  <!-- feature pills -->
+  <g font-size="14.5" font-weight="600">
+    <g transform="translate(80,420)">
+      <rect width="132" height="36" rx="18" fill="#0f1a2e" stroke="#2b3d5c" stroke-width="1"/>
+      <circle cx="20" cy="18" r="4" fill="#4fd6ff"/>
+      <text x="34" y="23" fill="#dce7f6">Read-aloud</text>
+    </g>
+    <g transform="translate(224,420)">
+      <rect width="168" height="36" rx="18" fill="#0f1a2e" stroke="#2b3d5c" stroke-width="1"/>
+      <circle cx="20" cy="18" r="4" fill="#9a7bff"/>
+      <text x="34" y="23" fill="#dce7f6">Push-to-talk (⌥)</text>
+    </g>
+    <g transform="translate(404,420)">
+      <rect width="116" height="36" rx="18" fill="#0f1a2e" stroke="#2b3d5c" stroke-width="1"/>
+      <circle cx="20" cy="18" r="4" fill="#4fd6ff"/>
+      <text x="34" y="23" fill="#dce7f6">Jarvis orb</text>
+    </g>
+    <g transform="translate(80,466)">
+      <rect width="120" height="36" rx="18" fill="#0f1a2e" stroke="#2b3d5c" stroke-width="1"/>
+      <circle cx="20" cy="18" r="4" fill="#9a7bff"/>
+      <text x="34" y="23" fill="#dce7f6">Local-first</text>
+    </g>
+    <g transform="translate(212,466)">
+      <rect width="180" height="36" rx="18" fill="#0f1a2e" stroke="#2b3d5c" stroke-width="1"/>
+      <circle cx="20" cy="18" r="4" fill="#4fd6ff"/>
+      <text x="34" y="23" fill="#dce7f6">Kokoro · Whisper</text>
+    </g>
+  </g>
+
+  <!-- ===== right: orb + menu mock ===== -->
+  <!-- orb glow + core -->
+  <circle cx="958" cy="150" r="150" fill="url(#glow)"/>
+  <circle cx="958" cy="150" r="120" fill="url(#glow)" opacity="0.5"/>
+  <!-- sound rings -->
+  <g fill="none" stroke="url(#accent)" stroke-opacity="0.35">
+    <circle cx="958" cy="150" r="70" stroke-width="1.5"/>
+    <circle cx="958" cy="150" r="92" stroke-width="1" stroke-opacity="0.18"/>
+  </g>
+  <circle cx="958" cy="150" r="46" fill="url(#orb)"/>
+  <circle cx="944" cy="136" r="13" fill="#ffffff" opacity="0.85"/>
+
+  <!-- menu-bar dropdown card (the real Model B menu) -->
+  <g transform="translate(706,232)">
+    <rect x="0" y="0" width="498" height="330" rx="18" fill="#0c1322" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.09" stroke-width="1"/>
+    <!-- header -->
+    <circle cx="34" cy="40" r="6" fill="#4fd6ff"/>
+    <text x="50" y="45" font-size="16" font-weight="600" fill="#8ea2bf">Speaking — reading Claude’s reply</text>
+    <line x1="22" y1="66" x2="476" y2="66" stroke="#ffffff" stroke-opacity="0.08"/>
+    <!-- rows -->
+    <text x="34" y="98"  font-size="16" font-weight="600" fill="#eef3fa">Pause Voice</text>
+    <text x="464" y="98" font-size="14" fill="#6f829e" text-anchor="end">⌃⌥Space</text>
+    <text x="34" y="130" font-size="16" font-weight="600" fill="#eef3fa">Stop Speaking</text>
+    <line x1="22" y1="150" x2="476" y2="150" stroke="#ffffff" stroke-opacity="0.08"/>
+    <text x="34" y="182" font-size="16" font-weight="600" fill="#eef3fa"><tspan fill="#4fd6ff">✓ </tspan>Read messages aloud</text>
+    <text x="34" y="214" font-size="16" font-weight="600" fill="#eef3fa">Voice</text>
+    <text x="464" y="214" font-size="16" fill="#6f829e" text-anchor="end">›</text>
+    <text x="34" y="246" font-size="15" fill="#6f829e">Hold Right Option (⌥) to dictate</text>
+    <line x1="22" y1="266" x2="476" y2="266" stroke="#ffffff" stroke-opacity="0.08"/>
+    <text x="34" y="298" font-size="16" font-weight="600" fill="#eef3fa">Launch at Login</text>
+  </g>
+</svg>

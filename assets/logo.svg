@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="lbg" cx="50%" cy="40%" r="75%">
+      <stop offset="0%" stop-color="#141d33"/>
+      <stop offset="100%" stop-color="#070a12"/>
+    </radialGradient>
+    <radialGradient id="lglow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7c5cff" stop-opacity="0.85"/>
+      <stop offset="45%" stop-color="#4aa6ff" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#4aa6ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lorb" cx="42%" cy="38%" r="65%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="24%" stop-color="#d6f3ff"/>
+      <stop offset="55%" stop-color="#4fd6ff"/>
+      <stop offset="100%" stop-color="#7c5cff"/>
+    </radialGradient>
+    <linearGradient id="lring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4fd6ff"/>
+      <stop offset="100%" stop-color="#9a7bff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#lbg)"/>
+  <circle cx="256" cy="248" r="190" fill="url(#lglow)"/>
+  <g fill="none" stroke="url(#lring)">
+    <circle cx="256" cy="248" r="150" stroke-opacity="0.30" stroke-width="3"/>
+    <circle cx="256" cy="248" r="186" stroke-opacity="0.14" stroke-width="2"/>
+  </g>
+  <circle cx="256" cy="248" r="96" fill="url(#lorb)"/>
+  <circle cx="226" cy="216" r="26" fill="#ffffff" opacity="0.85"/>
+</svg>

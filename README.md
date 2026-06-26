@@ -25,6 +25,10 @@ flowcode just sits beside it. **English out of the box; Czech is one click away.
 
 No cloud. No account. No plugin. Your voice and Claude's words never leave your Mac.
 
+<p align="center">
+  <img src="assets/demo.gif" alt="flowcode in action — reading a Claude Code reply aloud while the orb pulses in the menu bar, plus push-to-talk dictation" width="100%">
+</p>
+
 ## What it does
 
 - 🔊 **Read-aloud** — every new assistant message is spoken via local **Kokoro** TTS, with the orb

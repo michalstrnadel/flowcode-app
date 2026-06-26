@@ -5,7 +5,7 @@
 //  Foundation.Process does NOT reap a grandchild when the app crashes: if
 //  flowcode.app is force-killed (SIGKILL), the python core it spawned is
 //  reparented to launchd (PID 1) and keeps holding the mic + audio devices.
-//  This helper closes that gap, mirroring CodexBar's `CodexBarClaudeWatchdog`:
+//  This helper closes that gap with a parent-death watchdog:
 //
 //    1. posix_spawnp() the python core in its OWN process group (setpgid), so we
 //       can signal the whole group (interpreter + any worker it forks).

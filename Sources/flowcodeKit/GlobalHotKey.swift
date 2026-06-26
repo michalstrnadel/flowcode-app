@@ -48,8 +48,13 @@ public final class GlobalHotKey {
     /// Invoked on the main actor when the hotkey fires.
     private let onFire: @MainActor () -> Void
 
-    private var hotKeyRef: EventHotKeyRef?
-    private var eventHandler: EventHandlerRef?
+    // nonisolated(unsafe): these non-Sendable Carbon refs are touched from `deinit`
+    // (nonisolated). They're only mutated under the @MainActor methods below, so access
+    // is in practice serialized; the unregister calls are plain C functions safe to call
+    // from any context. (Avoids `isolated deinit`, which a production Swift 6.1 compiler
+    // refuses to enable.)
+    nonisolated(unsafe) private var hotKeyRef: EventHotKeyRef?
+    nonisolated(unsafe) private var eventHandler: EventHandlerRef?
     private var registered = false
 
     /// A process-unique signature/id pair so multiple hotkeys don't collide.
@@ -64,11 +69,10 @@ public final class GlobalHotKey {
         self.hotKeyID = EventHotKeyID(signature: sig, id: id)
     }
 
-    isolated deinit {
-        // isolated deinit (Swift 6.1+) runs on the MainActor, so it may touch the
-        // @MainActor-isolated Carbon refs directly. Mirrors StatusItemController's
-        // isolated-deinit teardown and avoids the "non-Sendable EventHotKeyRef? from
-        // nonisolated deinit" whole-module build error under Swift 6.
+    deinit {
+        // Plain (nonisolated) deinit: the refs are nonisolated(unsafe) and these are
+        // Carbon C functions callable from any context. (Production Swift 6.1 cannot
+        // enable `isolated deinit`, so we avoid it.)
         if let handler = eventHandler { RemoveEventHandler(handler) }
         if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
     }

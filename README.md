@@ -140,10 +140,9 @@ Homebrew) and [`CLAUDE.md`](CLAUDE.md) for contributor conventions.
 
 ## Credits
 
-Menu-bar app design inspired by **[CodexBar](https://github.com/steipete/CodexBar)** by Peter
-Steinberger ([steipete](https://github.com/steipete)). Voice engines: **Kokoro** (TTS) and
-**Whisper** (STT). Built on a fork of **[voicemode](https://github.com/mbailey/voicemode)** (Mike
-Bailey). Full attribution in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+Voice engines: **Kokoro** (TTS) and **Whisper** (STT). Built on a fork of
+**[voicemode](https://github.com/mbailey/voicemode)** (Mike Bailey). Full attribution in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
 ## License
 

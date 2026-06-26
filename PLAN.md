@@ -1,6 +1,6 @@
 # PLAN — `flowcode`: hlasový real-time orchestrátor pro Claude Code (macOS app + orb HUD)
 
-> Výstup **Step 0** (povinná pauza dle briefu). Žádný feature kód zatím nevznikl — vše níže stojí na **read-only analýze skutečných zdrojáků** `mbailey/voicemode` a `steipete/CodexBar` + webového researche (5 paralelních workflow běhů, ~1.8M tokenů).
+> Výstup **Step 0** (povinná pauza dle briefu). Žádný feature kód zatím nevznikl — vše níže stojí na **read-only analýze skutečných zdrojáků** `mbailey/voicemode` + webového researche (5 paralelních workflow běhů, ~1.8M tokenů).
 > Po schválení commitnu jako první artefakty do repa `PLAN.md` (zrcadlo tohoto souboru) a `BOUNDARIES.md` (sekce §5). Teprve pak stavím.
 
 ---
@@ -10,7 +10,7 @@
 „Mluvit s Claude Code" je vyřešené mnohokrát (voicemode, voice-mcp, …). Vyřešené **není**, aby to působilo **real-time, přerušitelně a jako produkt**, ne jako turn-based smyčka v terminálu. `flowcode` (pracovní název; alt. voiceflow) je:
 
 1. **Real-time hlasové jádro** (P1–P4): barge-in (přerušení do ~150 ms), streaming TTS, semantic endpointing, poctivá korekce po přerušení. Tohle je **produkt** a priorita.
-2. **Nativní macOS menu-bar appka** ve stylu **CodexBar**: stáhneš z GitHubu, zapneš, ovládáš jednoduše. Žádný terminál.
+2. **Nativní macOS menu-bar appka**: stáhneš z GitHubu, zapneš, ovládáš jednoduše. Žádný terminál.
 3. **Luminiscenční vizuální + zvuková odezva**: jedna světelná koule, která reaguje na hlas, „přemýšlí", mluví — se stavy a earcony. Sci-fi HUD pocit jako z palubního počítače.
 4. **(Sekundární) Hlasem řízená orchestrace + swarm vizualizace**: řekneš velký úkol → Claude Code rozjede dynamic workflow (ultracode) → koule se rozkvete do živé konstelace agentů, které sleduješ a slyšíš pracovat → pak se složí a přečte výsledek.
 
@@ -28,7 +28,7 @@ Pět komponent, dvě repa. Swift appka je **tenký controller; nikdy nesahá na 
 | **voicemode Python jádro** (MCP server + `converse()` tah) | Python 3.10+, FastMCP stdio, sounddevice/PortAudio. P1–P4 změny za default-OFF `VOICEMODE_*` flagy. | Veškeré real-time audio + celý tah. Barge-in in-process v `converse()`. Vysílá strojově čitelný stav přes IPC. Zůstává cross-platform (Linux headless). |
 | **Kokoro (TTS) + Whisper (STT)** | OpenAI-kompat na `127.0.0.1:8880` / `:2022`, OpenAI cloud fallback. **launchd** LaunchAgenty (spravuje voicemode). | Teplé lokální inference enginy. **Nejsou dětmi appky** — launchd je drží naživu (teplé modely = nízká TTFA). App je jen řídí (`voicemode service …`) a health-probuje TCP. |
 | **Status/control kanál (IPC)** | **Jeden Unix-domain socket** `~/.voicemode/run/flowcode.sock`, newline-delimited JSON, obousměrný. | Push živého stavu do HUD se sub-150 ms latencí (UDS ~0.1 ms; neviditelný pro TCC/firewall; bez kolize portů). Nese control příkazy + §7 verdikt zpět. |
-| **Sidecar watchdog** | Drobný helper v `Contents/Helpers` (klon `CodexBarClaudeWatchdog`): `posix_spawnp`+`setpgid`+`getppid()==1` detekce smrti rodiče + SIGTERM→grace→SIGKILL. | Garantuje, že Python jádro umře, když appka spadne (řeší orphan proces, který `Foundation.Process` sám neřeší). |
+| **Sidecar watchdog** | Drobný helper v `Contents/Helpers`: `posix_spawnp`+`setpgid`+`getppid()==1` detekce smrti rodiče + SIGTERM→grace→SIGKILL. | Garantuje, že Python jádro umře, když appka spadne (řeší orphan proces, který `Foundation.Process` sám neřeší). |
 | **Embedded Python runtime** | Relokovatelný **python-build-standalone** CPython + frozen `uv venv` v `Contents/Resources` (~150–300 MB). | „Stáhni a zapni" bez prerekvizit. App spouští interpreter z venv. `uvx` flow zůstává 100% pro vývojáře. |
 
 **Data flow (jeden tah):** mic → (Swift nativní tap pro *listening* vizuál) + (Python sounddevice pro STT) → `converse()` → STT → string do Claude Code → odpověď → P2 clause-split → Kokoro stream → `stream_pcm_audio` (+ Python posílá *speaking* amplitudu na socket) → reproduktor. Barge-in: Python detekuje řeč během playbacku → `stop_event` → `stream.abort()` + out-of-band priority event na socket → HUD řízne do ~16 ms.
@@ -155,7 +155,7 @@ Flag `VOICEMODE_WHISPER_LANGUAGE=cs`. **CZ STT:** fine-tune `mikr/whisper-large-
 ## 11. Repo strategie — dvě repa
 
 - **voicemode fork (overlay, ne hard fork):** každá změna za default-OFF `VOICEMODE_*` flagem, izolovaná do minima chokepointů (`stream_pcm_audio`, `text_to_speech_with_failover`, `converse()`/`streaming.py`, jedna fan-out řádka v `EventLogger.log_event`, nový `INTERRUPTED` event, `VOICEMODE_STATUS_SOCKET` broadcaster). Default chování beze změny → čistý rebase na upstream `master`. Obecné kusy (barge-in, event broadcast) případně upstreamovat jako PR.
-- **flowcode app repo (nový deliverable):** Swift package (CodexBar layout), watchdog helper, package/sign/notarize skripty, GitHub Actions release workflow, `version.env`, pinnutý odkaz na voicemode fork (submodule/pinned commit, ze kterého build step staví venv).
+- **flowcode app repo (nový deliverable):** Swift package (library + thin executable layout), watchdog helper, package/sign/notarize skripty, GitHub Actions release workflow, `version.env`, pinnutý odkaz na voicemode fork (submodule/pinned commit, ze kterého build step staví venv).
 - **Proč ne monorepo:** různé toolchainy (Swift/macOS CI vs Python/cross-platform vč. Linux-headless), různé kadence, voicemode musí zůstat nezávisle rebasovatelný.
 
 ---

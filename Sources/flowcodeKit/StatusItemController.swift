@@ -114,11 +114,10 @@ public final class StatusItemController {
         startObserving()
     }
 
-    // Swift 6.1+ isolated deinit: runs on the class's @MainActor isolation, so it can
-    // touch the non-Sendable NSStatusItem directly and remove it synchronously.
-    isolated deinit {
-        NSStatusBar.system.removeStatusItem(statusItem)
-    }
+    // No deinit: this controller lives for the whole app lifetime (held by AppDelegate),
+    // and macOS reclaims the status item when the process exits. (We avoid `isolated
+    // deinit` — a production Swift 6.1 compiler refuses to enable it — and a plain
+    // nonisolated deinit can't call the @MainActor `removeStatusItem`.)
 
     // MARK: Menu construction
 

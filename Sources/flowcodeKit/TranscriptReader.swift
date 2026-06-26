@@ -68,7 +68,16 @@ public final class TranscriptReader {
     // MARK: - Polling
 
     private func poll() {
-        for path in allSessionFiles() {
+        let files = allSessionFiles()
+        // Speak ONLY from the single active session — the most-recently-modified
+        // transcript (the one the user is actually interacting with). We still TAIL
+        // every file (advancing its offset) so that when the user switches sessions we
+        // don't replay the backlog that accumulated while it was in the background — we
+        // just don't read those background lines aloud. This is what stops flowcode from
+        // reading EVERY concurrent Claude Code session (including, during development,
+        // the session that is building flowcode itself).
+        let active = mostRecentlyModified(files)
+        for path in files {
             // First time we see a file → baseline at its current end so we never
             // speak pre-existing history (only messages that arrive from now on).
             guard let off = offsets[path] else {
@@ -76,11 +85,23 @@ public final class TranscriptReader {
                 partials[path] = Data()
                 continue
             }
-            tail(path, from: off)
+            tail(path, from: off, speak: path == active)
         }
     }
 
-    private func tail(_ path: String, from off: UInt64) {
+    /// The most-recently-modified session file = the one the user is actively using.
+    private func mostRecentlyModified(_ paths: [String]) -> String? {
+        var best: String?
+        var bestTime: TimeInterval = -1
+        for p in paths {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: p)
+            let t = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
+            if t > bestTime { bestTime = t; best = p }
+        }
+        return best
+    }
+
+    private func tail(_ path: String, from off: UInt64, speak: Bool) {
         let size = fileSize(path)
         var offset = off
         if size < offset {                // file truncated / rotated
@@ -101,7 +122,7 @@ public final class TranscriptReader {
             while let nl = buf.firstIndex(of: 0x0A) {
                 let line = buf.subdata(in: buf.startIndex..<nl)
                 buf = buf.subdata(in: buf.index(after: nl)..<buf.endIndex)
-                handleLine(line)
+                handleLine(line, speak: speak)
             }
             partials[path] = buf
         } catch {
@@ -109,7 +130,10 @@ public final class TranscriptReader {
         }
     }
 
-    private func handleLine(_ data: Data) {
+    private func handleLine(_ data: Data, speak: Bool) {
+        // Background session: its offset was already advanced by tail(); we just don't
+        // read its lines aloud. Only the active session reaches the emit below.
+        guard speak else { return }
         guard !data.isEmpty,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (obj["type"] as? String) == "assistant",

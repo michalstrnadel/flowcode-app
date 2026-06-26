@@ -56,12 +56,21 @@ public final class HUDController {
 
     // MARK: - Lifecycle
 
-    /// Begin: request mic access for listening reactivity, observe the store, sync visibility.
+    /// Begin: observe the store, sync visibility, and (socket path only) start the mic tap.
+    ///
+    /// The continuous mic tap drives the orb's "listening" inference ONLY on the socket
+    /// path (makeUniforms reads `mic.level` there). Model B derives amplitude from
+    /// `store.lastRMS` (TTS while speaking, push-to-talk while dictating), so it must NOT
+    /// hold the mic open — doing so lit the macOS microphone indicator permanently, even
+    /// while paused. In Model B the mic is opened only during active ⌥ dictation
+    /// (DictationController), which releases it the moment the key is let go.
     public func start() {
-        Task { [weak self] in
-            guard let self else { return }
-            if await MicPermission.ensureAccess() {
-                self.startMic()
+        if !settings.readAloudEnabled {
+            Task { [weak self] in
+                guard let self else { return }
+                if await MicPermission.ensureAccess() {
+                    self.startMic()
+                }
             }
         }
         observeStore()

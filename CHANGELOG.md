@@ -7,6 +7,9 @@ All notable changes to flowcode are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **Agent-driven install:** an [`AGENTS.md`](AGENTS.md) runbook so an AI coding agent (Claude Code)
+  installs flowcode end-to-end (services + build + permissions hand-off). This OSS version installs
+  from source via an agent — there is no prebuilt download by design.
 - **Claude Desktop support:** flowcode can now read the **Claude desktop app's** replies aloud
   (Chat, Cowork, and Code-in-desktop) by observing its Accessibility tree, and push-to-talk
   dictation pastes into it. Pick the target with **Listen to ▸ Claude Code / Claude Desktop / Both**

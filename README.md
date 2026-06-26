@@ -60,10 +60,24 @@ No cloud. No account. No plugin. Your voice and Claude's words never leave your 
 | 🖥️ **macOS 14+** | Apple Silicon & Intel. Menu-bar agent, no Dock icon. |
 | ⌨️ **Your terminal / editor** | Warp, Terminal, iTerm2, VS Code… dictation pastes into the focused app. |
 
-## Quick start
+## Install
 
-Requires **macOS 14+** and the two local voice services. A single idempotent script installs the
-services, builds the app, and walks you through permissions:
+flowcode is **installed by an AI coding agent** (Claude Code) — there's intentionally no
+prebuilt download. The agent handles the whole setup: voice services, build, and walking you
+through the two macOS permission toggles. Requires **macOS 14+**.
+
+### Recommended — let Claude Code install it
+
+```sh
+git clone https://github.com/michalstrnadel/flowcode-app.git
+cd flowcode-app
+claude            # then say:  "set up flowcode"
+```
+
+Claude Code reads [`AGENTS.md`](AGENTS.md) (and the bundled **`/setup`** skill) and installs
+everything end to end. Any agent that follows `AGENTS.md` works the same way.
+
+### Manual — run the script yourself
 
 ```sh
 git clone https://github.com/michalstrnadel/flowcode-app.git
@@ -73,9 +87,8 @@ scripts/setup.sh
 
 Then launch **flowcode.app** — the orb appears in your menu bar. `setup.sh` checks prerequisites
 (Homebrew, [uv](https://docs.astral.sh/uv/), Swift), installs + starts Kokoro and Whisper as
-launchd agents, builds + signs the app, and opens the right System Settings panes.
-
-> You can also invoke it from inside Claude Code with the bundled **`/setup`** skill.
+launchd agents, builds + signs the app, and opens the right System Settings panes. It's idempotent —
+safe to re-run.
 
 ### Permissions (one time)
 

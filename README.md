@@ -7,6 +7,7 @@
 <p align="center"><em>Talk to Claude Code. Hear it talk back. Fully local, on your Mac.</em></p>
 
 <p align="center">
+  <a href="https://github.com/michalstrnadel/flowcode-app/actions/workflows/ci.yml"><img src="https://github.com/michalstrnadel/flowcode-app/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-0b0e16?logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white" alt="Swift 6">
   <img src="https://img.shields.io/badge/install-build%20from%20source-2b3d5c" alt="Build from source">

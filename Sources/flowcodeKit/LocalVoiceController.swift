@@ -35,6 +35,11 @@ public final class LocalVoiceController {
     private var currentLanguage: String
     private var listenTarget: ListenTarget
     private var readAloudMode: ReadAloudMode
+    private var readyAlert: ReadyAlert
+
+    /// Retains the attention chime for the duration of playback (ARC would otherwise free a
+    /// temporary `NSSound` mid-sound). Reassigned per cue; chimes are short + one-per-reply.
+    private var attentionSound: NSSound?
 
     /// True while the user has paused the voice layer (see `pause()`).
     public private(set) var isPaused = false
@@ -47,12 +52,14 @@ public final class LocalVoiceController {
                 voice: String = "af_sky",
                 language: String = "en",
                 listenTarget: ListenTarget = .both,
-                readAloudMode: ReadAloudMode = .full) {
+                readAloudMode: ReadAloudMode = .full,
+                readyAlert: ReadyAlert = .spoken) {
         self.store = store
         self.currentVoice = voice
         self.currentLanguage = language
         self.listenTarget = listenTarget
         self.readAloudMode = readAloudMode
+        self.readyAlert = readyAlert
         self.engine = LocalVoiceController.makeEngine(language: language, voice: voice)
         self.dictation = DictationController(store: store, language: LanguageProfile.sttLanguage(for: language))
         self.sources = LocalVoiceController.makeSources(for: listenTarget)
@@ -137,6 +144,7 @@ public final class LocalVoiceController {
         synthChain.cancel()
         synthChain = Task {}
         engine.flush()
+        attentionSound?.stop()   // silence the ready chime too, not just the speech it announces
     }
 
     // MARK: - Pause / resume
@@ -206,6 +214,11 @@ public final class LocalVoiceController {
         sources.forEach { $0.setStreaming(stream) }
     }
 
+    /// Off / Chime / Spoken — the attention cue played before a reply is read. Live.
+    public func setReadyAlert(_ alert: ReadyAlert) {
+        readyAlert = alert
+    }
+
     private func rebuildEngine() {
         flush()                       // cancel in-flight synthesis + stop the old engine
         engine = LocalVoiceController.makeEngine(language: currentLanguage, voice: currentVoice)
@@ -223,18 +236,46 @@ public final class LocalVoiceController {
     private func speak(_ raw: String) {
         guard !isPaused, readAloudMode != .off else { return }
         let prepared = readAloudMode == .compact ? SpeechText.compact(raw) : raw
-        let sentences = SpeechText.sentences(from: prepared)
+        var sentences = SpeechText.sentences(from: prepared)
         guard !sentences.isEmpty else { return }
 
+        // "Ready" alert: a chime (+ a short spoken cue) BEFORE the reply, so a user who looked
+        // away during a long task is called back, then hears the reply (Full or Compact). It's
+        // coupled to read-aloud — only fires when a reply will actually be spoken — and is
+        // suppressed while Claude Desktop is frontmost (you're already watching that reply).
+        let claudeDesktopFront =
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier == ClaudeDesktopSource.bundleID
+        let alert = (readyAlert != .off) && !claudeDesktopFront
+        if alert, readyAlert == .spoken {
+            sentences.insert(SpeechText.readyPhrase(for: currentLanguage), at: 0)
+        }
+
+        let toSpeak = sentences
         let previous = synthChain
         synthChain = Task { [weak self] in
             _ = await previous.value          // preserve order across messages
-            for sentence in sentences {
+            if Task.isCancelled { return }
+            guard let self else { return }
+            // Chime IN ORDER — right before this reply and after any prior reply has drained —
+            // so it leads cleanly into the speech instead of overlapping the previous tail, and
+            // is skipped if the queue was flushed/paused (Task cancelled) in the meantime. Being
+            // serialized here also means consecutive replies' chimes never overlap-and-clip.
+            if alert { self.playAttentionChime() }
+            for sentence in toSpeak {
                 if Task.isCancelled { return }
-                guard let self else { return }
                 await self.engine.speak(sentence)
             }
         }
+    }
+
+    /// A short, pleasant built-in macOS chime ("Glass") to flag that a reply is ready. Uses a
+    /// system sound by name, so it needs NO bundled asset, NO entitlement, and NO Info.plist
+    /// change (which would drop the mic/Accessibility grant). Silent no-op if the sound is
+    /// unavailable. Held in `attentionSound` so ARC doesn't free it mid-playback.
+    private func playAttentionChime() {
+        let sound = NSSound(named: NSSound.Name("Glass"))
+        attentionSound = sound
+        sound?.play()
     }
 }
 
@@ -248,6 +289,12 @@ public enum SpeechText {
     /// Max characters of cleaned prose to speak per message (avoids reading a
     /// giant essay aloud; the on-screen text remains the full record).
     public static let maxChars = 1200
+
+    /// The short spoken "a reply is ready" cue, localized by the read-aloud language. Kept
+    /// brief so it leads cleanly into the reply that follows (see `ReadyAlert.spoken`).
+    public static func readyPhrase(for language: String) -> String {
+        language.lowercased().hasPrefix("cs") ? "Claude má pro tebe odpověď." : "Claude needs your attention."
+    }
 
     public static func sentences(from raw: String) -> [String] {
         // Cap the raw input BEFORE the O(n) clean so a giant essay never makes the

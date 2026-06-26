@@ -42,6 +42,7 @@ WITH_CORE=0
 SKIP_SERVICES=0
 SKIP_BUILD=0
 SKIP_MCP=0
+SKIP_PERMISSIONS=0   # --skip-permissions: don't reopen the System Settings panes (used by the in-app updater)
 WITH_CZECH=0   # --czech: pre-install the optional Czech neural voice (else on-demand from the menu)
 # Default to a MULTILINGUAL model so Czech dictation works out of the box. "small" is
 # the sweet spot (~0.5 GB, ~2x better Czech than "base"). Never default to a ".en" model.
@@ -52,6 +53,7 @@ while [ $# -gt 0 ]; do
         --skip-services)    SKIP_SERVICES=1 ;;
         --skip-build)       SKIP_BUILD=1 ;;
         --skip-mcp-cleanup) SKIP_MCP=1 ;;
+        --skip-permissions) SKIP_PERMISSIONS=1 ;;
         --czech)            WITH_CZECH=1 ;;
         --model)            shift; WHISPER_MODEL="${1:-small}" ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -192,11 +194,16 @@ fi
 # ==============================================================================
 # Phase 4 — permissions (guided; macOS can't grant TCC from a script)
 # ==============================================================================
-sect "permissions (one-time, manual)"
-log "Read-aloud needs NO permissions. Dictation (hold Right Option ⌥) needs Microphone + Accessibility."
-log "Opening the System Settings panes — enable 'flowcode' in BOTH, then relaunch the app:"
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone" 2>/dev/null || true
+if [ "${SKIP_PERMISSIONS}" = 1 ]; then
+    sect "permissions (skipped)"
+    log "Skipping the System Settings panes (grants survive a re-sign with a stable identity)."
+else
+    sect "permissions (one-time, manual)"
+    log "Read-aloud needs NO permissions. Dictation (hold Right Option ⌥) needs Microphone + Accessibility."
+    log "Opening the System Settings panes — enable 'flowcode' in BOTH, then relaunch the app:"
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone" 2>/dev/null || true
+fi
 
 # ==============================================================================
 # Phase 5 — remove the unused voicemode MCP (Model B doesn't use it)

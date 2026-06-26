@@ -41,6 +41,10 @@ public final class StatusItemController {
     private let onSetListenTarget: (_ target: ListenTarget) -> Void
     /// Model B: pick how much of each reply to speak (off/full/compact).
     private let onSetReadAloudMode: (_ mode: ReadAloudMode) -> Void
+    /// Model B: pick how a finished reply is announced (off/chime/spoken).
+    private let onSetReadyAlert: (_ alert: ReadyAlert) -> Void
+    /// Check GitHub for a newer release and offer to update.
+    private let onCheckForUpdates: () -> Void
 
     // MARK: AppKit objects
 
@@ -61,6 +65,8 @@ public final class StatusItemController {
     private var voiceItems: [String: NSMenuItem] = [:]
     private let readRepliesParentItem = NSMenuItem()
     private var readRepliesItems: [ReadAloudMode: NSMenuItem] = [:]
+    private let readyAlertParentItem = NSMenuItem()
+    private var readyAlertItems: [ReadyAlert: NSMenuItem] = [:]
     private let languageParentItem = NSMenuItem()
     private var languageItems: [String: NSMenuItem] = [:]
     private let listenTargetParentItem = NSMenuItem()
@@ -108,6 +114,13 @@ public final class StatusItemController {
         (mode: .off,     label: "Off — silent"),
     ]
 
+    /// How a finished reply is announced (the attention cue), in menu order.
+    private static let readyAlertOptions: [(alert: ReadyAlert, label: String)] = [
+        (alert: .spoken, label: "Chime + voice"),
+        (alert: .chime,  label: "Chime only"),
+        (alert: .off,    label: "Off"),
+    ]
+
     /// Which app(s) to read aloud, in menu order.
     private static let listenTargetOptions: [(target: ListenTarget, label: String)] = [
         (target: .claudeCode,    label: "Claude Code"),
@@ -127,7 +140,9 @@ public final class StatusItemController {
                 onSetVoice: @escaping (_ voice: String) -> Void = { _ in },
                 onSetLanguage: @escaping (_ language: String) -> Void = { _ in },
                 onSetListenTarget: @escaping (_ target: ListenTarget) -> Void = { _ in },
-                onSetReadAloudMode: @escaping (_ mode: ReadAloudMode) -> Void = { _ in }) {
+                onSetReadAloudMode: @escaping (_ mode: ReadAloudMode) -> Void = { _ in },
+                onSetReadyAlert: @escaping (_ alert: ReadyAlert) -> Void = { _ in },
+                onCheckForUpdates: @escaping () -> Void = {}) {
         self.store = store
         self.settings = settings
         self.onToggleSession = onToggleSession
@@ -139,6 +154,8 @@ public final class StatusItemController {
         self.onSetLanguage = onSetLanguage
         self.onSetListenTarget = onSetListenTarget
         self.onSetReadAloudMode = onSetReadAloudMode
+        self.onSetReadyAlert = onSetReadyAlert
+        self.onCheckForUpdates = onCheckForUpdates
 
         // Variable-length item so the glyph/title can size naturally.
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -196,6 +213,17 @@ public final class StatusItemController {
             guard let self else { return }
             self.settings.readAloudMode = mode
             self.onSetReadAloudMode(mode)
+        }
+
+        // Alert when ready ▸ Chime + voice / Chime only / Off — the attention cue played
+        // before a reply is read, so you can look away and be called back (live).
+        buildRadioSubmenu(parent: readyAlertParentItem,
+                          title: "Alert when ready",
+                          options: Self.readyAlertOptions.map { (key: $0.alert, label: $0.label) },
+                          into: &readyAlertItems) { [weak self] alert in
+            guard let self else { return }
+            self.settings.readyAlert = alert
+            self.onSetReadyAlert(alert)
         }
 
         // Voice picker submenu (Kokoro / English voices).
@@ -264,6 +292,12 @@ public final class StatusItemController {
         openLogItem.title = "Open Log…"
         bind(openLogItem) { [weak self] in self?.onOpenLog() }
         menu.addItem(openLogItem)
+
+        // Check GitHub for a newer release (from-source rebuild + relaunch when available).
+        let checkUpdatesItem = NSMenuItem()
+        checkUpdatesItem.title = "Check for Updates…"
+        bind(checkUpdatesItem) { [weak self] in self?.onCheckForUpdates() }
+        menu.addItem(checkUpdatesItem)
 
         menu.addItem(.separator())
 
@@ -453,6 +487,7 @@ public final class StatusItemController {
         launchAtLoginItem.state = settings.launchAtLogin ? .on : .off
         refreshVoiceChecks()
         refreshReadRepliesChecks()
+        refreshReadyAlertChecks()
         refreshLanguageChecks()
         refreshListenTargetChecks()
     }
@@ -502,6 +537,10 @@ public final class StatusItemController {
         for (mode, item) in readRepliesItems { item.state = (mode == settings.readAloudMode) ? .on : .off }
     }
 
+    private func refreshReadyAlertChecks() {
+        for (alert, item) in readyAlertItems { item.state = (alert == settings.readyAlert) ? .on : .off }
+    }
+
     private func refreshLanguageChecks() {
         for (id, item) in languageItems { item.state = (id == settings.language) ? .on : .off }
     }
@@ -529,6 +568,7 @@ public final class StatusItemController {
             _ = settings.readAloudEnabled
             _ = settings.voice
             _ = settings.readAloudMode
+            _ = settings.readyAlert
             _ = settings.language
             _ = settings.listenTarget
         } onChange: { [weak self] in

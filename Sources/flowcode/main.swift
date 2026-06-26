@@ -30,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let commitHotKeyHolder = HotKeyHolder()
     // Model B: global ⌃⌥Space to pause/resume the voice layer.
     private let pauseHotKeyHolder = HotKeyHolder()
+    // "Check for Updates…": compares the bundle version to the latest GitHub release and,
+    // for from-source installs, offers a one-click rebuild + relaunch.
+    private let updater = UpdateController()
 
     // Phase 8 (swarm orchestration, DEFAULT OFF). The state is always present (cheap,
     // inert; SwarmState.init does no IO and starts no work); the FSEvents observer is
@@ -53,7 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          voice: settings.voice,
                                          language: bootLanguage,
                                          listenTarget: settings.listenTarget,
-                                         readAloudMode: settings.readAloudMode)
+                                         readAloudMode: settings.readAloudMode,
+                                         readyAlert: settings.readyAlert)
             lv.start()
             self.localVoice = lv
 
@@ -135,7 +139,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             },
             onSetListenTarget: { [weak self] target in self?.localVoice?.setSources(for: target) },
-            onSetReadAloudMode: { [weak self] mode in self?.localVoice?.setReadAloudMode(mode) }
+            onSetReadAloudMode: { [weak self] mode in self?.localVoice?.setReadAloudMode(mode) },
+            onSetReadyAlert: { [weak self] alert in self?.localVoice?.setReadyAlert(alert) },
+            onCheckForUpdates: { [weak self] in self?.updater.checkForUpdates() }
         )
 
         // Orb HUD: the floating orb that reacts to the live voice state.

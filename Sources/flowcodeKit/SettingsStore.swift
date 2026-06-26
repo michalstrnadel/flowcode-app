@@ -28,6 +28,17 @@ public enum ReadAloudMode: String, CaseIterable, Sendable {
     case compact
 }
 
+/// How flowcode announces that a reply is ready — an attention cue played BEFORE the
+/// reply is read aloud, so you can look away and be called back. Persisted by raw value.
+///   off    — no announcement (read-aloud starts straight away)
+///   chime  — a short system chime before the reply
+///   spoken — a chime plus a short spoken "Claude needs your attention" before the reply
+public enum ReadyAlert: String, CaseIterable, Sendable {
+    case off
+    case chime
+    case spoken
+}
+
 @MainActor
 @Observable
 public final class SettingsStore {
@@ -48,6 +59,7 @@ public final class SettingsStore {
         static let hudOnlyMode         = "flowcode.hudOnlyMode"
         static let readAloud           = "flowcode.readAloud"
         static let readAloudMode       = "flowcode.readAloudMode"
+        static let readyAlert          = "flowcode.readyAlert"
         static let listenTarget        = "flowcode.listenTarget"
         static let socketPath          = "flowcode.socketPath"
     }
@@ -152,6 +164,15 @@ public final class SettingsStore {
         didSet { defaults.set(readAloudMode.rawValue, forKey: Keys.readAloudMode) }
     }
 
+    /// How a finished reply is announced before it's read (Off / Chime / Spoken). Live —
+    /// applied by `LocalVoiceController.setReadyAlert` without a relaunch. Defaults to
+    /// `.spoken`: a chime plus a short spoken cue, so a user who looked away during a long
+    /// task is called back and then gets the reply (Full or Compact per `readAloudMode`).
+    /// The cue is suppressed while Claude Desktop is frontmost (you're already watching).
+    public var readyAlert: ReadyAlert {
+        didSet { defaults.set(readyAlert.rawValue, forKey: Keys.readyAlert) }
+    }
+
     /// Which app(s) flowcode reads aloud (Claude Code / Claude Desktop / Both). Live —
     /// applied by `LocalVoiceController.setSources`. Defaults to `.both`: it reads
     /// Claude Code's active session AND a frontmost Claude Desktop window. The Claude
@@ -218,6 +239,13 @@ public final class SettingsStore {
             self.readAloudMode = mode
         } else {
             self.readAloudMode = .full
+        }
+
+        // Ready alert: default Spoken (chime + a short spoken cue); honor a stored choice.
+        if let raw = defaults.string(forKey: Keys.readyAlert), let alert = ReadyAlert(rawValue: raw) {
+            self.readyAlert = alert
+        } else {
+            self.readyAlert = .spoken
         }
 
         // Listen target: default Both (Claude Code + Claude Desktop); honor a stored choice.

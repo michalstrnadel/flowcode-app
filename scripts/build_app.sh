@@ -115,6 +115,13 @@ if [[ -f "${CZECH_SRC}" ]]; then
     chmod +x "${CONTENTS}/Resources/czech-voice.sh"
 fi
 
+# --- source checkout pointer (for the in-app "Check for Updates" rebuild) ------
+# Records where this bundle was built from so the in-app updater can `git pull` +
+# rebuild in place. Harmless if the checkout later moves: the updater also derives
+# the repo from a dist/ run and otherwise falls back to the GitHub Releases page.
+log "recording source checkout for the updater"
+printf '%s\n' "${REPO_ROOT}" > "${CONTENTS}/Resources/source-repo.txt"
+
 # --- placeholders so the layout is self-documenting ---------------------------
 cat > "${CONTENTS}/Resources/python/.placeholder" <<'EOF'
 This directory holds the relocatable embedded CPython venv with the voicemode

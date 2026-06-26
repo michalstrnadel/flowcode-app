@@ -390,6 +390,42 @@ func speechTextChecks() {
                  "Czech diacritics preserved through SpeechText")
 }
 
+// MARK: - update checker (semver compare, pure)
+
+func updateCheckerChecks() {
+    print("== update checker (semver) ==")
+    checks.check(SemVer("v0.2.0") == SemVer(0, 2, 0), "parse leading 'v'")
+    checks.check(SemVer("0.3.0")! > SemVer("0.2.0")!, "0.3.0 > 0.2.0 (newer is greater)")
+    checks.check(SemVer("1.0.0")! > SemVer("0.9.9")!, "major beats minor/patch")
+    checks.check(SemVer("0.2.10")! > SemVer("0.2.9")!, "numeric (not lexical) patch compare")
+    checks.check(SemVer("v0.2.0-rc1") == SemVer(0, 2, 0), "pre-release suffix ignored")
+    checks.check(SemVer("v1.2") == SemVer(1, 2, 0), "missing patch → 0")
+    checks.check(SemVer("nonsense") == nil, "garbage tag → nil")
+    checks.check(!(SemVer("0.2.0")! > SemVer("0.2.0")!), "equal version is not 'newer'")
+
+    // The updater interpolates filesystem paths into a bash script — quoting must neutralize
+    // spaces AND single quotes so a path can never break out of the literal (injection guard).
+    checks.check(UpdateController.shSingleQuote("/Users/me/My Project") == "'/Users/me/My Project'",
+                 "shSingleQuote wraps a path with spaces")
+    checks.check(UpdateController.shSingleQuote("/Users/o'brien/app") == "'/Users/o'\\''brien/app'",
+                 "shSingleQuote escapes an embedded single quote (close-escape-reopen)")
+}
+
+// MARK: - ready alert phrase (localized, pure)
+
+func readyAlertChecks() {
+    print("== ready alert phrase ==")
+    checks.check(!SpeechText.readyPhrase(for: "en").isEmpty, "ready phrase (en) is non-empty")
+    checks.check(!SpeechText.readyPhrase(for: "cs").isEmpty, "ready phrase (cs) is non-empty")
+    checks.check(SpeechText.readyPhrase(for: "cs") != SpeechText.readyPhrase(for: "en"),
+                 "ready phrase is localized (cs ≠ en)")
+    checks.check(SpeechText.readyPhrase(for: "cs-CZ") == SpeechText.readyPhrase(for: "cs"),
+                 "ready phrase resolves cs-CZ as Czech")
+    // The cue must be clean, speakable text (no markdown/glyphs that TTS would mangle).
+    checks.check(SpeechText.clean(SpeechText.readyPhrase(for: "cs")) == SpeechText.readyPhrase(for: "cs"),
+                 "ready phrase is already clean speakable text")
+}
+
 // MARK: - watchdog wait-status decode (phase 9)
 //
 // The watchdog (Helpers/flowcode-watchdog) decodes the Darwin wait(2) status by
@@ -426,6 +462,8 @@ speechTextChecks()
 languageProfileChecks()
 messageSettlerChecks()
 messageStreamerChecks()
+updateCheckerChecks()
+readyAlertChecks()
 watchdogChecks()
 print(checks.failures == 0 ? "\nALL PASS" : "\n\(checks.failures) FAILURE(S)")
 exit(checks.failures == 0 ? 0 : 1)

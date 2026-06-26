@@ -6,6 +6,27 @@ All notable changes to flowcode are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-26
+
+### Added
+- **Alert when ready** — flowcode now announces a finished reply before reading it. When a new
+  reply arrives it plays a short chime and (optionally) a spoken cue — "Claude needs your
+  attention" / "Claude má pro tebe odpověď" — so you can look away during a long task and be
+  called back, then hear the reply at your chosen length (Full or Compact). Pick **Alert when
+  ready ▸ Chime + voice / Chime only / Off** in the menu (default: Chime + voice). The cue is
+  suppressed while Claude Desktop is frontmost (you're already watching), uses a built-in macOS
+  system sound (no downloads), and respects **Read replies ▸ Off** (no reply, no alert).
+- **Check for Updates…** — a new menu item that compares your version against the latest GitHub
+  release. Because flowcode installs from source, when a newer version exists it offers
+  **Update & Relaunch**, which pulls the latest code, rebuilds + re-signs via `scripts/setup.sh`,
+  and relaunches the app (shown in Terminal so you can watch the build and approve any keychain
+  prompt). If the source checkout can't be found it falls back to opening the Releases page.
+
+### Notes
+- A friction-free Sparkle auto-update (download + install like other Mac apps) remains a later
+  milestone: it requires a paid Apple Developer ID, notarization, and an EdDSA-signed appcast.
+  Until then the from-source rebuild is the supported update path.
+
 ## [0.2.0] — 2026-06-26
 
 ### Added
@@ -83,6 +104,7 @@ First public release. 🎉
 - The real-time voice core (barge-in / converse / swarm) is present but **experimental and off by
   default**; the shipping experience is read-aloud + dictation.
 
-[Unreleased]: https://github.com/michalstrnadel/flowcode-app/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/michalstrnadel/flowcode-app/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/michalstrnadel/flowcode-app/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/michalstrnadel/flowcode-app/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/michalstrnadel/flowcode-app/releases/tag/v0.1.0

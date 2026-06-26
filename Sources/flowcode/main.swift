@@ -83,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { await self.client.send(.setFlag(key: key, value: enabled ? "true" : "false")) }
             },
             onTogglePause: { [weak self] in self?.localVoice?.togglePause() },
-            onOpenLog: { AuditLog().revealInFinder() },
+            onOpenLog: { [weak self] in self?.openLog() },
             onSetVoice: { [weak self] voice in self?.localVoice?.setVoice(voice) }
         )
 
@@ -151,6 +151,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// mechanism is wired (deliberately conservative — we never fabricate a path).
     private func resolveActiveClaudeSession() -> (projectDir: String, sessionId: String)? {
         return nil
+    }
+
+    /// Open a useful log location in Finder. Model B writes no audit log (that's the
+    /// §7/socket path), so prefer the voice-engine logs where read-aloud/dictation
+    /// problems actually surface; fall back to flowcode's own dir (created if absent).
+    private func openLog() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let voicemodeLogs = home.appendingPathComponent(".voicemode/logs")
+        if fm.fileExists(atPath: voicemodeLogs.path) {
+            NSWorkspace.shared.open(voicemodeLogs)
+            return
+        }
+        let flowDir = home.appendingPathComponent(".flowcode")
+        try? fm.createDirectory(at: flowDir, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(flowDir)
     }
 
     /// Start or stop a voice session based on the current session state.

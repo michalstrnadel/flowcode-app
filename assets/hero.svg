@@ -44,11 +44,11 @@
   <text x="110" y="99" font-size="22" font-weight="700" fill="#eaf1fb" letter-spacing="0.5">flowcode</text>
   <text x="216" y="99" font-size="15" font-weight="500" fill="#7f93b3" letter-spacing="0.3">· voice for Claude Code</text>
 
-  <text x="78" y="226" font-size="40" font-weight="800" fill="url(#wordmark)" letter-spacing="-0.5">The voice of</text>
-  <text x="78" y="286" font-size="40" font-weight="800" fill="url(#wordmark)" letter-spacing="-0.5">Claude Code<tspan fill="#4fd6ff">.</tspan></text>
+  <text x="78" y="226" font-size="40" font-weight="800" fill="url(#wordmark)" letter-spacing="-0.5">Talk to Claude Code.</text>
+  <text x="78" y="286" font-size="40" font-weight="800" fill="url(#wordmark)" letter-spacing="-0.5">Hear it talk back<tspan fill="#4fd6ff">.</tspan></text>
 
-  <text x="80" y="344" font-size="19" font-weight="500" fill="#aebed7">Hear Claude's replies read aloud. Dictate prompts by</text>
-  <text x="80" y="372" font-size="19" font-weight="500" fill="#aebed7">voice. Fully local on your Mac — Claude Code unchanged.</text>
+  <text x="80" y="344" font-size="19" font-weight="500" fill="#aebed7">Claude's replies, read aloud. Your prompts, by voice.</text>
+  <text x="80" y="372" font-size="19" font-weight="500" fill="#aebed7">Fully local on your Mac — Claude Code stays untouched.</text>
 
   <!-- feature pills -->
   <g font-size="14.5" font-weight="600">

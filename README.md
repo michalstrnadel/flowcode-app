@@ -4,7 +4,7 @@
 
 <h1 align="center">flowcode 🔊 — the voice of Claude Code</h1>
 
-<p align="center"><em>Hear every reply. Speak every prompt. Fully local, on your Mac.</em></p>
+<p align="center"><em>Talk to Claude Code. Hear it talk back. Fully local, on your Mac.</em></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14%2B-0b0e16?logo=apple&logoColor=white" alt="macOS 14+">
@@ -35,6 +35,10 @@ No cloud. No account. No plugin. Your voice and Claude's words never leave your 
 - ✦ **Jarvis orb HUD** — an audio-reactive luminous orb that shows when flowcode is listening,
   speaking, or idle.
 - ⚡ **Local-first & private** — TTS and STT are localhost services; nothing is sent to the cloud.
+
+<p align="center">
+  <img src="assets/orb.svg" alt="flowcode's orb reacting to speech, with a live audio waveform" width="100%">
+</p>
 
 ## Works with
 

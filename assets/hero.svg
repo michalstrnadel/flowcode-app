@@ -65,7 +65,7 @@
     <g transform="translate(404,420)">
       <rect width="116" height="36" rx="18" fill="#0f1a2e" stroke="#2b3d5c" stroke-width="1"/>
       <circle cx="20" cy="18" r="4" fill="#4fd6ff"/>
-      <text x="34" y="23" fill="#dce7f6">Jarvis orb</text>
+      <text x="34" y="23" fill="#dce7f6">Voice orb</text>
     </g>
     <g transform="translate(80,466)">
       <rect width="120" height="36" rx="18" fill="#0f1a2e" stroke="#2b3d5c" stroke-width="1"/>

@@ -1,4 +1,4 @@
-# PLAN — `flowcode`: hlasový real-time orchestrátor pro Claude Code (macOS app + Jarvis HUD)
+# PLAN — `flowcode`: hlasový real-time orchestrátor pro Claude Code (macOS app + orb HUD)
 
 > Výstup **Step 0** (povinná pauza dle briefu). Žádný feature kód zatím nevznikl — vše níže stojí na **read-only analýze skutečných zdrojáků** `mbailey/voicemode` a `steipete/CodexBar` + webového researche (5 paralelních workflow běhů, ~1.8M tokenů).
 > Po schválení commitnu jako první artefakty do repa `PLAN.md` (zrcadlo tohoto souboru) a `BOUNDARIES.md` (sekce §5). Teprve pak stavím.
@@ -11,7 +11,7 @@
 
 1. **Real-time hlasové jádro** (P1–P4): barge-in (přerušení do ~150 ms), streaming TTS, semantic endpointing, poctivá korekce po přerušení. Tohle je **produkt** a priorita.
 2. **Nativní macOS menu-bar appka** ve stylu **CodexBar**: stáhneš z GitHubu, zapneš, ovládáš jednoduše. Žádný terminál.
-3. **Jarvis/Siri vizuální + zvuková odezva**: jedna luminiscenční koule, která reaguje na hlas, „přemýšlí", mluví — se stavy a earcony. „Když Stark mluví na Jarvise."
+3. **Luminiscenční vizuální + zvuková odezva**: jedna světelná koule, která reaguje na hlas, „přemýšlí", mluví — se stavy a earcony. Sci-fi HUD pocit jako z palubního počítače.
 4. **(Sekundární) Hlasem řízená orchestrace + swarm vizualizace**: řekneš velký úkol → Claude Code rozjede dynamic workflow (ultracode) → koule se rozkvete do živé konstelace agentů, které sleduješ a slyšíš pracovat → pak se složí a přečte výsledek.
 
 **Severka (north star):** ~30s klip — uživatel přeruší asistenta uprostřed věty, on se okamžitě zastaví (zvuk i vizuál naráz) a přizpůsobí se. Severka **neobsahuje swarm** — ten je bonusové druhé demo.
@@ -24,7 +24,7 @@ Pět komponent, dvě repa. Swift appka je **tenký controller; nikdy nesahá na 
 
 | Komponenta | Tech | Odpovědnost |
 |---|---|---|
-| **flowcode.app** (menu-bar controller + HUD) | Swift 6.2, čisté SwiftPM, `.macOS(.v14)`, StrictConcurrency. SwiftUI `@main App` + `@NSApplicationDelegateAdaptor` + AppKit `NSStatusItem` (NE MenuBarExtra). `@Observable @MainActor` modely. Sparkle, KeyboardShortcuts, SMAppService. | Viditelný produkt. Stavová ikona, on/off, předvolby, Jarvis HUD, **§7 non-voice potvrzení**, audit okno. Vlastní mic TCC. Spouští + hlídá Python jádro. |
+| **flowcode.app** (menu-bar controller + HUD) | Swift 6.2, čisté SwiftPM, `.macOS(.v14)`, StrictConcurrency. SwiftUI `@main App` + `@NSApplicationDelegateAdaptor` + AppKit `NSStatusItem` (NE MenuBarExtra). `@Observable @MainActor` modely. Sparkle, KeyboardShortcuts, SMAppService. | Viditelný produkt. Stavová ikona, on/off, předvolby, orb HUD, **§7 non-voice potvrzení**, audit okno. Vlastní mic TCC. Spouští + hlídá Python jádro. |
 | **voicemode Python jádro** (MCP server + `converse()` tah) | Python 3.10+, FastMCP stdio, sounddevice/PortAudio. P1–P4 změny za default-OFF `VOICEMODE_*` flagy. | Veškeré real-time audio + celý tah. Barge-in in-process v `converse()`. Vysílá strojově čitelný stav přes IPC. Zůstává cross-platform (Linux headless). |
 | **Kokoro (TTS) + Whisper (STT)** | OpenAI-kompat na `127.0.0.1:8880` / `:2022`, OpenAI cloud fallback. **launchd** LaunchAgenty (spravuje voicemode). | Teplé lokální inference enginy. **Nejsou dětmi appky** — launchd je drží naživu (teplé modely = nízká TTFA). App je jen řídí (`voicemode service …`) a health-probuje TCP. |
 | **Status/control kanál (IPC)** | **Jeden Unix-domain socket** `~/.voicemode/run/flowcode.sock`, newline-delimited JSON, obousměrný. | Push živého stavu do HUD se sub-150 ms latencí (UDS ~0.1 ms; neviditelný pro TCC/firewall; bez kolize portů). Nese control příkazy + §7 verdikt zpět. |
@@ -103,7 +103,7 @@ converse()  # JEDEN blokující MCP tool = celý tah; už streamuje audio
 
 ---
 
-## 7. Jarvis HUD vrstva — spec
+## 7. Orb HUD vrstva — spec
 
 **Koncept:** JEDNA koule, ne pět widgetů. V klidu malá/tlumená u notche, během tahu rozkvete do centrálního HUD, pak se složí. Stav kóduje **pohyb+tvar** primárně, barva sekundárně; těsná paleta (téměř černá + jeden chladný akcent cyan→violet) → prémiové, ne gamer-RGB, color-blind safe.
 
@@ -166,7 +166,7 @@ Flag `VOICEMODE_WHISPER_LANGUAGE=cs`. **CZ STT:** fine-tune `mikr/whisper-large-
 
 - **Phase 0 — Python Step 0 (foundation):** `stop_event` + `samples_written` do `stream_pcm_audio` (jediný chokepoint); `VOICEMODE_STATUS_SOCKET` broadcaster (1 fan-out řádka v `EventLogger.log_event`) + `INTERRUPTED` event konstanta. Bez změny chování. *(Python)*
 - **Phase 1 — Swift app shell:** SwiftPM, `NSStatusItem`, `@Observable` stores, `.accessory`+`LSUIElement`, SMAppService, mic `requestAccess`+Info.plist, spawn embedded venv přes watchdog, UDS status reader mapující existující eventy (listening/speaking/idle) na ikonu. → **Použitelná on/off appka.** *(Swift)*
-- **Phase 2 — Jarvis koule (nativní, bez Python závislosti pro listening):** click-through `NSPanel`, SDF `.colorEffect` shader, `TimelineView` idle breathing, AVAudioEngine plain mic tap → vDSP RMS → listening reaktivita, Reduce Motion/Transparency skiny, earcony. → **První půlka dema funguje s nulovou Python závislostí.** *(Swift)*
+- **Phase 2 — Světelná koule (nativní, bez Python závislosti pro listening):** click-through `NSPanel`, SDF `.colorEffect` shader, `TimelineView` idle breathing, AVAudioEngine plain mic tap → vDSP RMS → listening reaktivita, Reduce Motion/Transparency skiny, earcony. → **První půlka dema funguje s nulovou Python závislostí.** *(Swift)*
 - **Phase 3 — Python P2:** client-side dělení na klauzule. *(Python)*
 - **Phase 4 — Python P1 + IPC core:** concurrent asyncio VAD listener + `stop_event` break + `stream.abort()` + low-latency OutputStream + day-1 mic gating; out-of-band `INTERRUPTED` event na socket; Swift konzumuje speaking envelope (60 Hz) + barge-in cut. → **Severkový klip dosažitelný (money shot).** *(Python + Swift wiring)*
 - **Phase 5 — §7 brána + audit:** Swift popover + global hotkey + Touch ID tier; timeout=deny; TTS duck; route PermissionRequest; audit okno; Python hook blokující `converse()` na verdiktu; **rozšířit `config_reload()`** o nové flagy. *(Swift + Python)*

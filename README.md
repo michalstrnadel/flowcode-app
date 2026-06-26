@@ -18,7 +18,7 @@
 
 flowcode is a tiny native macOS **menu-bar app** that gives [Claude Code](https://claude.com/claude-code)
 a voice. It reads each new assistant reply **aloud** (local Kokoro TTS) and lets you **dictate**
-prompts by holding a key (local Whisper STT) — while a luminous Jarvis-style orb reacts to the
+prompts by holding a key (local Whisper STT) — while a luminous, audio-reactive orb reacts to the
 conversation. Claude Code itself runs completely unmodified; flowcode just sits beside it.
 
 No cloud. No account. No plugin. Your voice and Claude's words never leave your Mac.
@@ -32,7 +32,7 @@ No cloud. No account. No plugin. Your voice and Claude's words never leave your 
   anywhere). It never presses Enter — *you* commit.
 - ⏯️ **Pause / Resume** the whole voice layer with **⌃⌥Space** or the menu — the mic is released the
   moment you're not dictating.
-- ✦ **Jarvis orb HUD** — an audio-reactive luminous orb that shows when flowcode is listening,
+- ✦ **Orb HUD** — a luminous, audio-reactive orb that shows when flowcode is listening,
   speaking, or idle.
 - ⚡ **Local-first & private** — TTS and STT are localhost services; nothing is sent to the cloud.
 

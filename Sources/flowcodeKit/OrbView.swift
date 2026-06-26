@@ -1,6 +1,6 @@
 //
 //  OrbView.swift
-//  flowcode — Phase 2 "Jarvis/Siri" audio-reactive orb HUD.
+//  flowcode — Phase 2 audio-reactive orb HUD.
 //
 //  The centerpiece: ONE luminous orb that morphs across voice states. Rendered with a
 //  CAMetalLayer-backed NSView whose fragment shader paints a premium SDF sphere with a

@@ -158,11 +158,11 @@ func loopbackChecks() async {
     checks.check(got.contains("{\"cmd\":\"start\"}"), "server received start cmd over socket")
 }
 
-// MARK: - jarvis orb (phase 2) checks
+// MARK: - orb (phase 2) checks
 
 @MainActor
 func metalChecks() async {
-    print("== jarvis orb (phase 2) ==")
+    print("== orb (phase 2) ==")
     checks.check(MemoryLayout<OrbUniforms>.stride == 48, "OrbUniforms stride == 48 (matches MSL 3x float4)")
     checks.check(orbParams(for: .idle).motion != orbParams(for: .speaking).motion,
                  "orbParams distinct per state (idle vs speaking)")

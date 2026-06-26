@@ -1,6 +1,6 @@
 # flowcode app icon
 
-Pixel-art glowing **Orb** — the same cyan→violet Jarvis HUD orb the app renders,
+Pixel-art glowing **Orb** — the same cyan→violet orb HUD the app renders,
 on a dark macOS squircle (ordered-dither pixel gradient + tech rings).
 
 Regenerate:

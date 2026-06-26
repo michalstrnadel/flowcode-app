@@ -1,6 +1,6 @@
 //
 //  HUDController.swift
-//  flowcode — Phase 2 orchestrator for the Jarvis orb HUD.
+//  flowcode — Phase 2 orchestrator for the orb HUD.
 //
 //  Owns the orb renderer, its floating click-through panel, the per-state visual model,
 //  the microphone level tap, and earcons. Subscribes to the voice-session store and:

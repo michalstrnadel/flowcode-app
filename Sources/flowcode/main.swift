@@ -87,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onSetVoice: { [weak self] voice in self?.localVoice?.setVoice(voice) }
         )
 
-        // Jarvis HUD: the floating orb that reacts to the live voice state.
+        // Orb HUD: the floating orb that reacts to the live voice state.
         let hud = HUDController(store: store, settings: settings)
         self.hud = hud
         hud.start()

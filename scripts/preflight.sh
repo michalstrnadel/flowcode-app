@@ -88,7 +88,8 @@ sect "swift build"
 if swift build --package-path "${REPO_ROOT}" >/tmp/flowcode-preflight-build.log 2>&1; then
     pass "swift build succeeds"
 else
-    fail "swift build failed (see /tmp/flowcode-preflight-build.log)"
+    fail "swift build failed:"
+    tail -n 50 /tmp/flowcode-preflight-build.log >&2
 fi
 
 # --- 6. flowcode-selftest -----------------------------------------------------
@@ -96,7 +97,8 @@ sect "flowcode-selftest"
 if swift run --package-path "${REPO_ROOT}" flowcode-selftest >/tmp/flowcode-preflight-selftest.log 2>&1; then
     pass "flowcode-selftest passes"
 else
-    fail "flowcode-selftest failed (see /tmp/flowcode-preflight-selftest.log)"
+    fail "flowcode-selftest failed:"
+    tail -n 50 /tmp/flowcode-preflight-selftest.log >&2
 fi
 
 # --- 7. watchdog compiles standalone ------------------------------------------

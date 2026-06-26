@@ -17,7 +17,15 @@ let package = Package(
         .library(name: "flowcodeKit", targets: ["flowcodeKit"]),
     ],
     targets: [
-        .target(name: "flowcodeKit", path: "Sources/flowcodeKit"),
+        .target(
+            name: "flowcodeKit",
+            path: "Sources/flowcodeKit",
+            // `isolated deinit` (used in StatusItemController/GlobalHotKey to touch
+            // @MainActor non-Sendable state during teardown) graduated to stable only in
+            // newer toolchains; enabling the experimental feature keeps the package building
+            // on Swift 6.1 (e.g. the GitHub macOS CI runner) as well as 6.2+.
+            swiftSettings: [.enableExperimentalFeature("IsolatedDeinit")]
+        ),
         .executableTarget(
             name: "flowcode",
             dependencies: ["flowcodeKit"],

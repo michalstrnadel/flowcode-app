@@ -26,6 +26,23 @@
 import Darwin
 import Foundation
 
+// MARK: - termination signals
+//
+// The watchdog must reap its child group on ANY exit, not only on parent-death.
+// flowcode stops the child by sending the watchdog a SIGTERM (Process.terminate());
+// without trapping it, the watchdog would die immediately and orphan the child (the
+// Python TTS server kept holding memory). We set an async-signal-safe flag here and
+// act on it in the main poll loop (kill() in a handler is fine, but the teardown loop
+// uses Date()/usleep which are not signal-safe — so flag-and-poll is the safe pattern).
+nonisolated(unsafe) var gTerminate: sig_atomic_t = 0
+func flowcodeWatchdogSignal(_ sig: Int32) { gTerminate = 1 }
+
+func installTerminationHandlers() {
+    for sig in [SIGTERM, SIGINT, SIGHUP] {
+        signal(sig, flowcodeWatchdogSignal)
+    }
+}
+
 // MARK: - args
 
 let argv = CommandLine.arguments
@@ -106,11 +123,18 @@ func terminateGroup(_ pid: pid_t) {
 // MARK: - main loop
 
 let child = spawnChild()
+installTerminationHandlers()
 
-// Watch both directions:
-//   * child exits on its own        -> waitpid succeeds, mirror its status.
-//   * parent (flowcode.app) dies    -> getppid() becomes 1, tear the child down.
+// Watch three ways:
+//   * we were asked to stop (SIGTERM/INT/HUP) -> tear the child group down.
+//   * child exits on its own                  -> waitpid succeeds, mirror its status.
+//   * parent (flowcode.app) dies              -> getppid() becomes 1, tear the child down.
 while true {
+    if gTerminate != 0 {
+        terminateGroup(child)
+        exit(0)
+    }
+
     var status: Int32 = 0
     let r = waitpid(child, &status, WNOHANG)
     if r == child {

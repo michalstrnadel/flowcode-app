@@ -17,17 +17,35 @@
 
 ---
 
-flowcode is a tiny native macOS **menu-bar app** that gives [Claude Code](https://claude.com/claude-code)
-— and the **Claude desktop app** (Chat, Cowork, Code) — a voice. It reads each new assistant reply
-**aloud** (local Kokoro TTS) and lets you **dictate** prompts by holding a key (local Whisper STT) —
-while a luminous, audio-reactive orb reacts to the conversation. Claude runs completely unmodified;
-flowcode just sits beside it. **English out of the box; Czech is one click away.**
-
-No cloud. No account. No plugin. Your voice and Claude's words never leave your Mac.
-
 <p align="center">
   <img src="assets/demo.gif" alt="flowcode in action — reading a Claude Code reply aloud while the orb pulses in the menu bar, plus push-to-talk dictation" width="100%">
 </p>
+
+Kick off a task, then go do something else. **flowcode** is a tiny native macOS **menu-bar app** that
+gives [Claude Code](https://claude.com/claude-code) — and the **Claude desktop app** (Chat, Cowork,
+Code) — a voice: it **reads each new reply aloud** the moment it lands (local **Kokoro** TTS), so you
+hear when Claude finishes, asks a question, or needs your call — without babysitting the terminal.
+When it's your turn, **hold Right Option (⌥) and talk** (local **Whisper** STT); your words are pasted
+in, and *you* press Enter. A Jarvis-style orb pulses while it speaks.
+
+The only truly Mac-native, **voice-first** companion for Claude Code: read-aloud **and** dictation — no
+Electron, no cloud, no account, no freemium. Claude runs completely unmodified; flowcode just sits
+beside it. **English out of the box; Czech one click away.**
+
+### Why you'll want this
+
+- 👂 **Stop watching the scrollback.** Claude works while you do something else; the reply is spoken the
+  instant it arrives — tool calls and code blocks skipped, so you hear the answer, not the plumbing — and
+  you come back exactly when you're needed.
+- 🎙️ **Talk instead of type, safely.** Hold Right Option, speak, release → transcribed locally and pasted
+  into whatever's focused (terminal, editor, the Claude desktop app). It **never presses Enter** — you stay
+  in control of every commit.
+- 🔒 **Fully on-device, private.** Kokoro TTS + Whisper STT run on localhost — your voice and Claude's
+  words never leave your Mac (verifiable with `lsof` / Little Snitch). No telemetry, no account, no plugin.
+
+> **Honest scope:** this is read-aloud + push-to-talk dictation today — a voice layer, not hands-free
+> barge-in conversation (yet). Install is **build-from-source** (`scripts/setup.sh`) — there's no prebuilt
+> one-click download yet.
 
 ## What it does
 

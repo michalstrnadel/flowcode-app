@@ -6,6 +6,10 @@ All notable changes to flowcode are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-06-26
+
+First public release. 🎉
+
 ### Added
 - **Agent-driven install:** an [`AGENTS.md`](AGENTS.md) runbook so an AI coding agent (Claude Code)
   installs flowcode end-to-end (services + build + permissions hand-off). This OSS version installs
@@ -49,4 +53,5 @@ All notable changes to flowcode are documented here. The format is based on
 - The real-time voice core (barge-in / converse / swarm) is present but **experimental and off by
   default**; the shipping experience is read-aloud + dictation.
 
-[Unreleased]: https://github.com/michalstrnadel/flowcode-app/commits/main
+[Unreleased]: https://github.com/michalstrnadel/flowcode-app/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/michalstrnadel/flowcode-app/releases/tag/v0.1.0

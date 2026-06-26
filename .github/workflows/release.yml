@@ -39,10 +39,32 @@ permissions:
   contents: write   # create releases + upload assets
 
 jobs:
+  # Gate the whole notarized pipeline on the Apple signing secret being present.
+  # Without it (e.g. the open-source repo with no paid Apple account), a `v*` tag
+  # simply SKIPS the release jobs — the run is green, not a failed build. Add the
+  # APPLE_* / SPARKLE_* / HOMEBREW_TAP_TOKEN secrets (see DISTRIBUTION.md) to enable it.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      can_release: ${{ steps.check.outputs.can_release }}
+    steps:
+      - id: check
+        env:
+          SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+        run: |
+          if [ -n "${SIGN_IDENTITY}" ]; then
+            echo "can_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Apple signing secrets configured — skipping the notarized release for this tag. See DISTRIBUTION.md to enable it."
+          fi
+
   preflight:
+    needs: guard
+    if: needs.guard.outputs.can_release == 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Run headless preflight
         run: bash scripts/preflight.sh
 
@@ -63,7 +85,7 @@ jobs:
       NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
       SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Verify tag matches version.env
         run: |
@@ -134,7 +156,7 @@ jobs:
     needs: build
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/download-artifact@v4
         with:

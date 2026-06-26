@@ -21,10 +21,19 @@ import Foundation
 public final class LocalVoiceController {
 
     private let store: VoiceSessionStore
-    private let reader: TranscriptReader
-    private var kokoro: KokoroClient
-    private let tts = TtsPlayer()
+    /// One or more transcript sources feeding the same speak() pipeline (Claude Code's
+    /// JSONL reader and/or the Claude Desktop AX reader). See `AssistantTextSource`.
+    private var sources: [AssistantTextSource]
+    /// The active read-aloud backend (Kokoro for English, Apple for Czech). Swapped live
+    /// by `setLanguage` / `setVoice`.
+    private var engine: TTSEngine
     private let dictation: DictationController
+
+    // Live, mutable selections (so the menu can change them without a relaunch).
+    private var currentVoice: String
+    private var currentLanguage: String
+    private var listenTarget: ListenTarget
+    private var readAloudMode: ReadAloudMode
 
     /// True while the user has paused the voice layer (see `pause()`).
     public private(set) var isPaused = false
@@ -33,46 +42,76 @@ public final class LocalVoiceController {
     /// each new batch awaits the previous one before enqueuing its clips.
     private var synthChain: Task<Void, Never> = Task {}
 
-    public init(store: VoiceSessionStore, voice: String = "af_sky") {
+    public init(store: VoiceSessionStore,
+                voice: String = "af_sky",
+                language: String = "en",
+                listenTarget: ListenTarget = .both,
+                readAloudMode: ReadAloudMode = .full) {
         self.store = store
-        self.kokoro = KokoroClient(voice: voice)
-        self.reader = TranscriptReader()
-        self.dictation = DictationController(store: store)
+        self.currentVoice = voice
+        self.currentLanguage = language
+        self.listenTarget = listenTarget
+        self.readAloudMode = readAloudMode
+        self.engine = LocalVoiceController.makeEngine(language: language, voice: voice)
+        self.dictation = DictationController(store: store, language: LanguageProfile.sttLanguage(for: language))
+        self.sources = LocalVoiceController.makeSources(for: listenTarget)
+    }
+
+    // MARK: - Engine / source factories
+
+    private static func makeEngine(language: String, voice: String) -> TTSEngine {
+        switch LanguageProfile.ttsEngineKind(for: language) {
+        case .kokoro: return KokoroTTSEngine(voice: voice)
+        case .coqui:  return CoquiTTSEngine()   // Czech neural voice (local server :8771)
+        case .apple:  return AppleSpeechEngine(localeId: LanguageProfile.appleLocale(for: language) ?? "cs-CZ")
+        }
+    }
+
+    private static func makeSources(for target: ListenTarget) -> [AssistantTextSource] {
+        switch target {
+        case .claudeCode:    return [TranscriptReader()]
+        case .claudeDesktop: return [ClaudeDesktopSource()]
+        case .both:          return [TranscriptReader(), ClaudeDesktopSource()]
+        }
     }
 
     public func start() {
-        // New assistant message in the live transcript → speak it.
-        reader.onAssistantText = { [weak self] text in self?.speak(text) }
+        // Warm up the engine so the first real sentence doesn't pay the cold-start cost.
+        engine.warmUp()
+        bindEngine()
 
         // Push-to-talk dictation. When the user starts talking, stop read-aloud so
         // the mic doesn't capture Claude's own TTS off the speakers.
         dictation.onStartCapture = { [weak self] in self?.flush() }
         dictation.start()
 
-        // Warm up Kokoro so the first real sentence doesn't pay the cold-start cost
-        // (connection + model spin-up). The clip is discarded — never enqueued.
-        let warm = kokoro
-        Task { _ = try? await warm.synthesize(".") }
+        store.connected = true   // Model B has no socket; treat as "live".
 
-        // TTS amplitude → orb speaking pulse (the HUD reads store.lastRMS).
-        tts.onAmplitude = { [weak self] amp in self?.store.lastRMS = Double(amp) }
+        // New assistant message from any source → speak it.
+        startSources()
+    }
 
-        // Speaking on/off → show/hide the orb panel + set the coarse state.
-        tts.onSpeakingChanged = { [weak self] speaking in
+    /// Bind every source's callback to speak() and start it. Re-callable (resume / source swap).
+    private func startSources() {
+        for s in sources { s.onAssistantText = { [weak self] text in self?.speak(text) } }
+        sources.forEach { $0.start() }
+    }
+
+    /// Wire the engine's orb signals into the store the HUD observes.
+    private func bindEngine() {
+        engine.onAmplitude = { [weak self] amp in self?.store.lastRMS = Double(amp) }
+        engine.onSpeakingChanged = { [weak self] speaking in
             guard let self else { return }
             self.store.sessionActive = speaking
             self.store.state = speaking ? .speaking : .idle
             if !speaking { self.store.lastRMS = 0 }
         }
-
-        store.connected = true   // Model B has no socket; treat as "live".
-        reader.start()
     }
 
     public func stop() {
-        reader.stop()
+        sources.forEach { $0.stop() }
         dictation.stop()
-        tts.flush()
+        engine.flush()
         synthChain.cancel()
     }
 
@@ -80,51 +119,90 @@ public final class LocalVoiceController {
     public func flush() {
         synthChain.cancel()
         synthChain = Task {}
-        tts.flush()
+        engine.flush()
     }
 
     // MARK: - Pause / resume
 
-    /// Pause the whole voice layer: stop speaking + drop the queue, stop tailing the
-    /// transcript, and stop dictation — but keep the app running. The orb goes idle.
+    /// Pause the whole voice layer: stop speaking + drop the queue, stop every source,
+    /// and stop dictation — but keep the app running. The orb goes idle.
     public func pause() {
         guard !isPaused else { return }
         isPaused = true
-        flush()                 // stop speaking + drop queued clips
-        reader.stop()           // stop reading new assistant messages
-        dictation.stop()        // stop push-to-talk capture
+        flush()                       // stop speaking + drop queued clips
+        sources.forEach { $0.stop() } // stop reading new assistant messages
+        dictation.stop()              // stop push-to-talk capture
         store.paused = true
         store.sessionActive = false
         store.state = .idle
         store.lastRMS = 0
     }
 
-    /// Resume after `pause()`. `reader.start()` re-baselines each transcript file at its
-    /// current end, so messages that arrived while paused are NOT replayed — only new ones.
+    /// Resume after `pause()`. Each source re-baselines at its current end on start, so
+    /// messages that arrived while paused are NOT replayed — only new ones.
     public func resume() {
         guard isPaused else { return }
         isPaused = false
         store.paused = false
         dictation.start()
-        reader.start()
+        startSources()
     }
 
     public func togglePause() { isPaused ? resume() : pause() }
 
-    /// Switch the Kokoro voice used for subsequent synthesis (Model B voice picker).
-    /// Cheap — `KokoroClient` is a stateless value type. Flushes any in-flight queue so
-    /// the change is audible from the next message rather than mid-utterance.
+    // MARK: - Live settings
+
+    /// Switch the Kokoro voice for the English engine. No-op for the Czech (Apple) engine,
+    /// which has no Kokoro voice id. Rebuilds the engine so the change is audible next message.
     public func setVoice(_ voice: String) {
-        guard voice != kokoro.voice else { return }
-        kokoro = KokoroClient(voice: voice)
-        flush()
+        guard voice != currentVoice else { return }
+        currentVoice = voice
+        if LanguageProfile.ttsEngineKind(for: currentLanguage) == .kokoro {
+            rebuildEngine()
+        }
+    }
+
+    /// Switch language for BOTH read-aloud (engine) and dictation (Whisper) — live, no relaunch.
+    public func setLanguage(_ language: String) {
+        guard language != currentLanguage else { return }
+        currentLanguage = language
+        rebuildEngine()
+        dictation.setLanguage(LanguageProfile.sttLanguage(for: language))
+    }
+
+    /// Switch which app(s) flowcode reads aloud — live, no relaunch.
+    public func setSources(for target: ListenTarget) {
+        guard target != listenTarget else { return }
+        listenTarget = target
+        sources.forEach { $0.stop() }
+        sources = LocalVoiceController.makeSources(for: target)
+        if !isPaused { startSources() }
+    }
+
+    /// Off / Full / Compact — applied to subsequent messages immediately.
+    public func setReadAloudMode(_ mode: ReadAloudMode) {
+        readAloudMode = mode
+        if mode == .off { flush() }   // silence anything already speaking
+    }
+
+    private func rebuildEngine() {
+        flush()                       // cancel in-flight synthesis + stop the old engine
+        engine = LocalVoiceController.makeEngine(language: currentLanguage, voice: currentVoice)
+        bindEngine()
+        engine.warmUp()
+    }
+
+    /// Inspection hook for the selftest (proves the Claude Code path is unchanged).
+    public func debugSourceTypeNames() -> [String] {
+        sources.map { String(describing: type(of: $0)) }
     }
 
     // MARK: - Synthesis pipeline
 
     private func speak(_ raw: String) {
-        guard !isPaused else { return }
-        let sentences = SpeechText.sentences(from: raw)
+        guard !isPaused, readAloudMode != .off else { return }
+        let prepared = readAloudMode == .compact ? SpeechText.compact(raw) : raw
+        let sentences = SpeechText.sentences(from: prepared)
         guard !sentences.isEmpty else { return }
 
         let previous = synthChain
@@ -133,9 +211,7 @@ public final class LocalVoiceController {
             for sentence in sentences {
                 if Task.isCancelled { return }
                 guard let self else { return }
-                guard let wav = try? await self.kokoro.synthesize(sentence) else { continue }
-                if Task.isCancelled { return }
-                await MainActor.run { self.tts.enqueue(wav) }
+                await self.engine.speak(sentence)
             }
         }
     }
@@ -164,6 +240,21 @@ public enum SpeechText {
         // Make the VERY FIRST clip short so audio starts sooner; keep later sentences
         // whole for natural prosody.
         return splitFirstAggressively(sentences)
+    }
+
+    /// Compact ("gist") read-aloud: for a long reply, speak only the FIRST and LAST
+    /// sentence — the opener (what it did) and the conclusion (the result) — and skip
+    /// the middle. Short replies (≤ 2 sentences) are returned whole. Offline + instant;
+    /// the on-screen text is always the full record. The result is fed back through
+    /// `sentences(from:)`, so cleaning/splitting still applies.
+    public static func compact(_ raw: String) -> String {
+        let cleaned = clean(String(raw.prefix(maxChars * 4)))
+        guard !cleaned.isEmpty else { return "" }
+        let sentences = splitSentences(cleaned)
+        guard sentences.count > 2, let first = sentences.first, let last = sentences.last else {
+            return cleaned
+        }
+        return first + " " + last
     }
 
     /// If the first sentence is long, split it at its earliest clause boundary

@@ -46,3 +46,44 @@ public struct KokoroClient: Sendable {
         return data
     }
 }
+
+// MARK: - TTSEngine wrapper
+
+/// The Kokoro read-aloud backend behind the `TTSEngine` protocol. This is the
+/// ORIGINAL byte path (synthesize WAV → TtsPlayer queue) wrapped unchanged, so the
+/// English experience is byte-identical — the abstraction only adds a seam for the
+/// Czech engine to slot in beside it.
+@MainActor
+public final class KokoroTTSEngine: TTSEngine {
+
+    private var client: KokoroClient
+    private let player = TtsPlayer()
+
+    public var voice: String { client.voice }
+
+    public var onAmplitude: ((Float) -> Void)? {
+        get { player.onAmplitude }
+        set { player.onAmplitude = newValue }
+    }
+    public var onSpeakingChanged: ((Bool) -> Void)? {
+        get { player.onSpeakingChanged }
+        set { player.onSpeakingChanged = newValue }
+    }
+
+    public init(voice: String) {
+        self.client = KokoroClient(voice: voice)
+    }
+
+    public func speak(_ text: String) async {
+        guard let wav = try? await client.synthesize(text) else { return }
+        player.enqueue(wav)
+    }
+
+    public func flush() { player.flush() }
+
+    public func warmUp() {
+        // Discard a tiny clip to pay the connection + model spin-up cost up front.
+        let c = client
+        Task { _ = try? await c.synthesize(".") }
+    }
+}

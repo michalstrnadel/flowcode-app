@@ -190,3 +190,8 @@ public final class TranscriptReader {
         return (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
     }
 }
+
+// TranscriptReader already exposes `onAssistantText` / `start()` / `stop()` with the
+// exact shape the protocol requires — so the Claude Code path becomes a source with
+// no internal change.
+extension TranscriptReader: AssistantTextSource {}

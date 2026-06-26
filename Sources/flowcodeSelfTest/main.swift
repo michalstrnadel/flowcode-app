@@ -238,6 +238,13 @@ func modelBChecks() {
     // which hard-crashes a bare (un-bundled) binary with no NSMicrophoneUsageDescription
     // — fine in the shipping .app, but not here. So we assert the pause state machine
     // (the regression we care about: pause stops everything) without touching the mic.
+    // Regression guard: the default Listen target keeps the Claude Code path (a
+    // TranscriptReader) as the first source — unchanged behavior — and adds the desktop
+    // source beside it.
+    let names = lv.debugSourceTypeNames()
+    checks.check(names.first == "TranscriptReader", "default sources keep Claude Code (TranscriptReader) first")
+    checks.check(names.contains("ClaudeDesktopSource"), "default sources also include Claude Desktop")
+
     store.state = .speaking
     store.sessionActive = true
     lv.pause()
@@ -249,6 +256,43 @@ func modelBChecks() {
     lv.stop() // mic-safe teardown
 }
 
+// MARK: - language profile (Czech routing)
+
+func languageProfileChecks() {
+    print("== language profile ==")
+    checks.check(LanguageProfile.ttsEngineKind(for: "en") == .kokoro, "en → Kokoro TTS")
+    checks.check(LanguageProfile.ttsEngineKind(for: "cs") == .coqui, "cs → Coqui TTS (on-demand neural)")
+    checks.check(LanguageProfile.ttsEngineKind(for: "cs-CZ") == .coqui, "cs-CZ → Coqui TTS")
+    checks.check(LanguageProfile.ttsEngineKind(for: "fr") == .kokoro, "unknown language → Kokoro (English fallback)")
+    checks.check(LanguageProfile.sttLanguage(for: "cs") == "cs", "STT language cs")
+    checks.check(LanguageProfile.sttLanguage(for: "en") == "en", "STT language en")
+    checks.check(LanguageProfile.sttLanguage(for: "xx") == "en", "STT unknown → en")
+    checks.check(LanguageProfile.appleLocale(for: "cs") == "cs-CZ", "Apple locale = cs-CZ for Czech")
+    checks.check(LanguageProfile.appleLocale(for: "en") == nil, "Apple locale nil for English")
+}
+
+// MARK: - claude desktop settle/de-dup (pure, no AX)
+
+func messageSettlerChecks() {
+    print("== claude desktop settler ==")
+    var s = MessageSettler(settleInterval: 0.8)
+    _ = s.update(current: "", now: 0)                                         // baseline (empty)
+    checks.check(s.update(current: "H", now: 0.1) == nil, "streaming: no emit while growing (1)")
+    checks.check(s.update(current: "He", now: 0.2) == nil, "streaming: no emit while growing (2)")
+    checks.check(s.update(current: "Hello.", now: 0.3) == nil, "streaming: no emit while growing (3)")
+    checks.check(s.update(current: "Hello.", now: 0.5) == nil, "stable but not settled (<0.8s)")
+    checks.check(s.update(current: "Hello.", now: 1.2) == "Hello.", "settled → emit exactly once")
+    checks.check(s.update(current: "Hello.", now: 2.0) == nil, "no re-emit of the same message")
+    // A brand-new block (not a prefix-extension) is spoken whole.
+    checks.check(s.update(current: "Second message.", now: 2.1) == nil, "new block: streaming")
+    checks.check(s.update(current: "Second message.", now: 3.0) == "Second message.", "new block settles → emit")
+
+    // Baseline seeds pre-existing text so on-screen history is never replayed.
+    var s2 = MessageSettler(settleInterval: 0.5)
+    _ = s2.update(current: "Existing history here.", now: 0)
+    checks.check(s2.update(current: "Existing history here.", now: 1.0) == nil, "pre-existing text baselined, not spoken")
+}
+
 func speechTextChecks() {
     print("== speech text (model B) ==")
     let parts = SpeechText.sentences(
@@ -258,6 +302,20 @@ func speechTextChecks() {
 
     let codeOnly = SpeechText.sentences(from: "```\nlet x = 1\n```")
     checks.check(codeOnly.isEmpty, "code-only message yields nothing to speak")
+
+    // Compact ("gist") mode: keep only the first + last sentence of a long reply.
+    let compact = SpeechText.compact("One here. Two middle. Three middle. Four last.")
+    checks.check(compact.contains("One here.") && compact.contains("Four last."),
+                 "compact keeps first + last sentence")
+    checks.check(!compact.contains("Two middle.") && !compact.contains("Three middle."),
+                 "compact drops the middle")
+    let shortKept = SpeechText.compact("Only one sentence here.")
+    checks.check(shortKept.contains("Only one sentence here."), "compact returns short replies whole")
+
+    // Czech diacritics must survive cleaning + sentence splitting.
+    let cz = SpeechText.sentences(from: "Příliš žluťoučký kůň. Úpěl ďábelské ódy.").joined(separator: " ")
+    checks.check(cz.contains("ž") && cz.contains("ř") && cz.contains("ů") && cz.contains("ď"),
+                 "Czech diacritics preserved through SpeechText")
 }
 
 // MARK: - watchdog wait-status decode (phase 9)
@@ -293,6 +351,8 @@ await metalChecks()
 swarmChecks()
 modelBChecks()
 speechTextChecks()
+languageProfileChecks()
+messageSettlerChecks()
 watchdogChecks()
 print(checks.failures == 0 ? "\nALL PASS" : "\n\(checks.failures) FAILURE(S)")
 exit(checks.failures == 0 ? 0 : 1)

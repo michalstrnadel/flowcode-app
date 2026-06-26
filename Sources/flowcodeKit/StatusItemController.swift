@@ -35,6 +35,12 @@ public final class StatusItemController {
     private let onOpenLog: () -> Void
     /// Model B: pick the Kokoro read-aloud voice.
     private let onSetVoice: (_ voice: String) -> Void
+    /// Model B: pick the spoken language (en/cs) for read-aloud + dictation.
+    private let onSetLanguage: (_ language: String) -> Void
+    /// Model B: pick which app(s) flowcode reads aloud.
+    private let onSetListenTarget: (_ target: ListenTarget) -> Void
+    /// Model B: pick how much of each reply to speak (off/full/compact).
+    private let onSetReadAloudMode: (_ mode: ReadAloudMode) -> Void
 
     // MARK: AppKit objects
 
@@ -53,6 +59,12 @@ public final class StatusItemController {
     private let readAloudItem = NSMenuItem()
     private let voiceParentItem = NSMenuItem()
     private var voiceItems: [String: NSMenuItem] = [:]
+    private let readRepliesParentItem = NSMenuItem()
+    private var readRepliesItems: [ReadAloudMode: NSMenuItem] = [:]
+    private let languageParentItem = NSMenuItem()
+    private var languageItems: [String: NSMenuItem] = [:]
+    private let listenTargetParentItem = NSMenuItem()
+    private var listenTargetItems: [ListenTarget: NSMenuItem] = [:]
     private let dictationHintItem = NSMenuItem()
     private let openLogItem = NSMenuItem()
 
@@ -83,6 +95,26 @@ public final class StatusItemController {
         .init(id: "bm_lewis",    label: "Lewis — UK, male"),
     ]
 
+    /// Spoken languages offered in the Model B menu. `id` is the persisted tag.
+    private static let languageOptions: [VoiceOption] = [
+        .init(id: "en", label: "English"),
+        .init(id: "cs", label: "Čeština"),
+    ]
+
+    /// Read-aloud volume-of-speech modes, in menu order.
+    private static let readAloudModeOptions: [(mode: ReadAloudMode, label: String)] = [
+        (mode: .full,    label: "Full reply"),
+        (mode: .compact, label: "Compact (gist)"),
+        (mode: .off,     label: "Off — silent"),
+    ]
+
+    /// Which app(s) to read aloud, in menu order.
+    private static let listenTargetOptions: [(target: ListenTarget, label: String)] = [
+        (target: .claudeCode,    label: "Claude Code"),
+        (target: .claudeDesktop, label: "Claude Desktop (experimental)"),
+        (target: .both,          label: "Both"),
+    ]
+
     // MARK: Init
 
     public init(store: VoiceSessionStore,
@@ -92,7 +124,10 @@ public final class StatusItemController {
                 onSetFlag: @escaping (_ key: String, _ enabled: Bool) -> Void = { _, _ in },
                 onTogglePause: @escaping () -> Void = {},
                 onOpenLog: @escaping () -> Void = {},
-                onSetVoice: @escaping (_ voice: String) -> Void = { _ in }) {
+                onSetVoice: @escaping (_ voice: String) -> Void = { _ in },
+                onSetLanguage: @escaping (_ language: String) -> Void = { _ in },
+                onSetListenTarget: @escaping (_ target: ListenTarget) -> Void = { _ in },
+                onSetReadAloudMode: @escaping (_ mode: ReadAloudMode) -> Void = { _ in }) {
         self.store = store
         self.settings = settings
         self.onToggleSession = onToggleSession
@@ -101,6 +136,9 @@ public final class StatusItemController {
         self.onTogglePause = onTogglePause
         self.onOpenLog = onOpenLog
         self.onSetVoice = onSetVoice
+        self.onSetLanguage = onSetLanguage
+        self.onSetListenTarget = onSetListenTarget
+        self.onSetReadAloudMode = onSetReadAloudMode
 
         // Variable-length item so the glyph/title can size naturally.
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -149,16 +187,18 @@ public final class StatusItemController {
 
         menu.addItem(.separator())
 
-        // Read messages aloud (persisted). Switching modes needs a relaunch — say so.
-        configureToggle(readAloudItem,
-                        title: "Read messages aloud",
-                        flagKey: nil,
-                        get: { [weak self] in self?.settings.readAloudEnabled ?? true },
-                        set: { [weak self] new in self?.settings.readAloudEnabled = new })
-        readAloudItem.toolTip = "Takes effect after relaunch"
-        menu.addItem(readAloudItem)
+        // Read replies ▸ Full / Compact / Off — the everyday "how much to speak" control
+        // (live; no relaunch). "Off" silences replies but keeps dictation working.
+        buildRadioSubmenu(parent: readRepliesParentItem,
+                          title: "Read replies",
+                          options: Self.readAloudModeOptions.map { (key: $0.mode, label: $0.label) },
+                          into: &readRepliesItems) { [weak self] mode in
+            guard let self else { return }
+            self.settings.readAloudMode = mode
+            self.onSetReadAloudMode(mode)
+        }
 
-        // Voice picker submenu.
+        // Voice picker submenu (Kokoro / English voices).
         voiceParentItem.title = "Voice"
         let voiceMenu = NSMenu()
         for opt in Self.voiceOptions {
@@ -177,12 +217,42 @@ public final class StatusItemController {
         voiceParentItem.submenu = voiceMenu
         menu.addItem(voiceParentItem)
 
+        // Language ▸ English / Čeština — read-aloud engine + dictation (live).
+        buildRadioSubmenu(parent: languageParentItem,
+                          title: "Language",
+                          options: Self.languageOptions.map { (key: $0.id, label: $0.label) },
+                          into: &languageItems) { [weak self] lang in
+            guard let self else { return }
+            self.settings.language = lang
+            self.onSetLanguage(lang)
+        }
+
+        // Listen to ▸ Claude Code / Claude Desktop / Both (live).
+        buildRadioSubmenu(parent: listenTargetParentItem,
+                          title: "Listen to",
+                          options: Self.listenTargetOptions.map { (key: $0.target, label: $0.label) },
+                          into: &listenTargetItems) { [weak self] target in
+            guard let self else { return }
+            self.settings.listenTarget = target
+            self.onSetListenTarget(target)
+        }
+
         // Non-clickable hint for push-to-talk dictation.
         dictationHintItem.title = "Hold Right Option (⌥) to dictate"
         dictationHintItem.isEnabled = false
         menu.addItem(dictationHintItem)
 
         menu.addItem(.separator())
+
+        // Read messages aloud (persisted) — the experimental architecture switch. Off
+        // drops to the external voice-core path; relaunch to apply.
+        configureToggle(readAloudItem,
+                        title: "Read messages aloud",
+                        flagKey: nil,
+                        get: { [weak self] in self?.settings.readAloudEnabled ?? true },
+                        set: { [weak self] new in self?.settings.readAloudEnabled = new })
+        readAloudItem.toolTip = "Experimental architecture switch — takes effect after relaunch. Use “Read replies › Off” to just mute."
+        menu.addItem(readAloudItem)
 
         configureToggle(launchAtLoginItem,
                         title: "Launch at Login",
@@ -258,6 +328,28 @@ public final class StatusItemController {
         item.action = #selector(ActionCoordinator.invoke(_:))
         if !key.isEmpty { item.keyEquivalent = key }
         coordinator.bind(item, handler)
+    }
+
+    /// Build a checkmark "radio" submenu under `parent`, registering each item in `items`
+    /// so the current selection can be ticked on render. `choose` runs on selection; the
+    /// checkmarks themselves are refreshed reactively via Observation.
+    private func buildRadioSubmenu<Key: Hashable>(parent: NSMenuItem,
+                                                  title: String,
+                                                  options: [(key: Key, label: String)],
+                                                  into items: inout [Key: NSMenuItem],
+                                                  choose: @escaping (Key) -> Void) {
+        parent.title = title
+        let sub = NSMenu()
+        for opt in options {
+            let item = NSMenuItem()
+            item.title = opt.label
+            let key = opt.key
+            bind(item) { choose(key) }
+            sub.addItem(item)
+            items[key] = item
+        }
+        parent.submenu = sub
+        menu.addItem(parent)
     }
 
     /// Wires a checkmark toggle item to a getter/setter pair on `settings`. When
@@ -336,7 +428,10 @@ public final class StatusItemController {
         let paused = store.paused
         let glyph: String
         let statusText: String
-        if paused {
+        if let override = store.statusOverride, !override.isEmpty {
+            glyph = "↓"
+            statusText = override
+        } else if paused {
             glyph = "❙❙"
             statusText = "Paused — tap Resume"
         } else {
@@ -357,6 +452,9 @@ public final class StatusItemController {
         readAloudItem.state = settings.readAloudEnabled ? .on : .off
         launchAtLoginItem.state = settings.launchAtLogin ? .on : .off
         refreshVoiceChecks()
+        refreshReadRepliesChecks()
+        refreshLanguageChecks()
+        refreshListenTargetChecks()
     }
 
     /// Socket-path dynamic parts (unchanged from the pre-Model-B menu).
@@ -400,6 +498,18 @@ public final class StatusItemController {
         }
     }
 
+    private func refreshReadRepliesChecks() {
+        for (mode, item) in readRepliesItems { item.state = (mode == settings.readAloudMode) ? .on : .off }
+    }
+
+    private func refreshLanguageChecks() {
+        for (id, item) in languageItems { item.state = (id == settings.language) ? .on : .off }
+    }
+
+    private func refreshListenTargetChecks() {
+        for (target, item) in listenTargetItems { item.state = (target == settings.listenTarget) ? .on : .off }
+    }
+
     // MARK: Observation
 
     /// Begins (and continuously re-arms) Observation tracking. The closure reads the
@@ -411,12 +521,16 @@ public final class StatusItemController {
             _ = store.connected
             _ = store.sessionActive
             _ = store.paused
+            _ = store.statusOverride
             _ = settings.bargeInEnabled
             _ = settings.streamingChunking
             _ = settings.semanticEndpointing
             _ = settings.launchAtLogin
             _ = settings.readAloudEnabled
             _ = settings.voice
+            _ = settings.readAloudMode
+            _ = settings.language
+            _ = settings.listenTarget
         } onChange: { [weak self] in
             // onChange is delivered synchronously at willSet time and may be off the main
             // actor's static context; hop to the main actor to mutate AppKit.

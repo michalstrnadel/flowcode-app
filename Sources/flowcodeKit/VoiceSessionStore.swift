@@ -32,6 +32,11 @@ public final class VoiceSessionStore {
     /// Whether the IPC socket to the Python core is currently connected.
     public var connected: Bool = false
 
+    /// Transient status line that, when set, overrides the menu header (e.g.
+    /// "Downloading Czech voice…" while the on-demand Coqui voice provisions).
+    /// nil = normal state-driven header. Set by CoquiVoiceService.
+    public var statusOverride: String?
+
     /// Most recent assistant-TTS amplitude (RMS), 0...~1. Phase 4 telemetry.
     public var lastRMS: Double = 0
 

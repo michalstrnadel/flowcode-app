@@ -11,6 +11,23 @@ import Foundation
 import Observation
 import ServiceManagement
 
+/// Which app(s) flowcode reads aloud. Persisted by raw value.
+public enum ListenTarget: String, CaseIterable, Sendable {
+    case claudeCode
+    case claudeDesktop
+    case both
+}
+
+/// How much of each assistant reply to speak. Persisted by raw value.
+///   off     — say nothing (dictation still works)
+///   full    — the whole reply (today's behavior)
+///   compact — just the gist (first + last sentence), for when Claude rambles
+public enum ReadAloudMode: String, CaseIterable, Sendable {
+    case off
+    case full
+    case compact
+}
+
 @MainActor
 @Observable
 public final class SettingsStore {
@@ -30,6 +47,8 @@ public final class SettingsStore {
         static let swarmMode           = "flowcode.swarmMode"
         static let hudOnlyMode         = "flowcode.hudOnlyMode"
         static let readAloud           = "flowcode.readAloud"
+        static let readAloudMode       = "flowcode.readAloudMode"
+        static let listenTarget        = "flowcode.listenTarget"
         static let socketPath          = "flowcode.socketPath"
     }
 
@@ -125,6 +144,23 @@ public final class SettingsStore {
         didSet { defaults.set(readAloudEnabled, forKey: Keys.readAloud) }
     }
 
+    /// How much of each assistant reply to speak (Off / Full / Compact). Live —
+    /// applied by `LocalVoiceController.setReadAloudMode` without a relaunch. Defaults
+    /// to `.full` (today's behavior). This is the everyday on/off + "gist" control;
+    /// `readAloudEnabled` above is the (experimental) architecture switch.
+    public var readAloudMode: ReadAloudMode {
+        didSet { defaults.set(readAloudMode.rawValue, forKey: Keys.readAloudMode) }
+    }
+
+    /// Which app(s) flowcode reads aloud (Claude Code / Claude Desktop / Both). Live —
+    /// applied by `LocalVoiceController.setSources`. Defaults to `.both`: it reads
+    /// Claude Code's active session AND a frontmost Claude Desktop window. The Claude
+    /// Desktop source stays inert until Accessibility is granted, so this never adds a
+    /// prompt for read-aloud-only users.
+    public var listenTarget: ListenTarget {
+        didSet { defaults.set(listenTarget.rawValue, forKey: Keys.listenTarget) }
+    }
+
     // MARK: - Socket path
 
     /// Optional user override for the IPC socket path. When `nil`/empty the
@@ -175,6 +211,20 @@ public final class SettingsStore {
             self.readAloudEnabled = defaults.bool(forKey: Keys.readAloud)
         } else {
             self.readAloudEnabled = true
+        }
+
+        // Read-aloud volume of speech: default Full (today's behavior); honor a stored choice.
+        if let raw = defaults.string(forKey: Keys.readAloudMode), let mode = ReadAloudMode(rawValue: raw) {
+            self.readAloudMode = mode
+        } else {
+            self.readAloudMode = .full
+        }
+
+        // Listen target: default Both (Claude Code + Claude Desktop); honor a stored choice.
+        if let raw = defaults.string(forKey: Keys.listenTarget), let target = ListenTarget(rawValue: raw) {
+            self.listenTarget = target
+        } else {
+            self.listenTarget = .both
         }
 
         // Barge-in is the whole point of flowcode, so default it ON (respect an

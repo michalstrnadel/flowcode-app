@@ -23,7 +23,9 @@
 #   --skip-services    don't install/start Kokoro/Whisper
 #   --skip-build       don't build the app
 #   --skip-mcp-cleanup don't touch ~/.claude.json
-#   --model NAME       Whisper model for the service install (default: base)
+#   --model NAME       Whisper model for the service install (default: small). Use a
+#                      MULTILINGUAL model (no ".en" suffix) — Czech dictation needs it.
+#                      "small" gives roughly 2x better Czech accuracy than "base".
 #   SIGN_IDENTITY=...  codesign identity (e.g. "flowcode-dev" or a Developer ID); ad-hoc if unset
 #   SIGN_KEYCHAIN=...  keychain holding SIGN_IDENTITY (optional)
 #   FLOWCODE_CORE_CWD  path to a local voicemode checkout (for the voicemode entrypoint)
@@ -40,14 +42,18 @@ WITH_CORE=0
 SKIP_SERVICES=0
 SKIP_BUILD=0
 SKIP_MCP=0
-WHISPER_MODEL="base"
+WITH_CZECH=0   # --czech: pre-install the optional Czech neural voice (else on-demand from the menu)
+# Default to a MULTILINGUAL model so Czech dictation works out of the box. "small" is
+# the sweet spot (~0.5 GB, ~2x better Czech than "base"). Never default to a ".en" model.
+WHISPER_MODEL="small"
 while [ $# -gt 0 ]; do
     case "$1" in
         --with-core)        WITH_CORE=1 ;;
         --skip-services)    SKIP_SERVICES=1 ;;
         --skip-build)       SKIP_BUILD=1 ;;
         --skip-mcp-cleanup) SKIP_MCP=1 ;;
-        --model)            shift; WHISPER_MODEL="${1:-base}" ;;
+        --czech)            WITH_CZECH=1 ;;
+        --model)            shift; WHISPER_MODEL="${1:-small}" ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -130,6 +136,11 @@ else
     if port_open 2022; then
         ok "Whisper already serving on :2022 — skipping install"
     elif [ "${#VM_CMD[@]}" -gt 0 ]; then
+        # A ".en" model is English-only and CANNOT transcribe Czech. Warn loudly so a
+        # Czech user isn't left wondering why dictation produces gibberish.
+        case "${WHISPER_MODEL}" in
+            *.en) warn "model '${WHISPER_MODEL}' is English-only — Czech dictation will NOT work. Use a multilingual model (e.g. 'small')." ;;
+        esac
         log "installing Whisper (STT) service (model: ${WHISPER_MODEL})…"
         "${VM_CMD[@]}" service install whisper --model "${WHISPER_MODEL}" \
             || "${VM_CMD[@]}" service install whisper \
@@ -215,6 +226,22 @@ else
         fi
     done
     log "Restore (if ever needed): cp <file>.bak-${ts} <file>"
+fi
+
+# ==============================================================================
+# Phase 5b — optional Czech neural voice (only with --czech; otherwise on-demand)
+# ==============================================================================
+if [ "${WITH_CZECH}" = 1 ]; then
+    sect "Czech voice (optional)"
+    log "Pre-installing the Czech neural voice (Coqui, ~350 MB)…"
+    if "${SCRIPT_DIR}/czech-voice.sh" install; then
+        ok "Czech voice installed — pick 'Language ▸ Čeština' in the menu"
+    else
+        fail "Czech voice install failed (you can still trigger it later from the menu)"
+    fi
+else
+    sect "Czech voice (optional)"
+    ok "skipped — flowcode downloads it on demand when you pick Čeština (or run: scripts/czech-voice.sh install)"
 fi
 
 # ==============================================================================

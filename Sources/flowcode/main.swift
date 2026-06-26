@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Model B: self-contained voice layer (reads Claude Code's transcript aloud). When
     // active, the socket/core path above is skipped entirely.
     private var localVoice: LocalVoiceController?
+    // Czech read-aloud: on-demand neural voice (download prompt + local server lifecycle).
+    private var coquiService: CoquiVoiceService?
     // §7 confirmation gate (default-OFF: inert until a confirm_request actually
     // arrives over the socket, which only happens when the Python gate is enabled).
     private var confirmGate: ConfirmGateController?
@@ -40,9 +42,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // flowcode tails the live session transcript and reads each new assistant
             // message aloud (Kokoro), driving the orb. NO socket, NO Python core, and
             // NO microphone (read-aloud doesn't capture) — so no mic prompt either.
-            let lv = LocalVoiceController(store: store, voice: settings.voice)
+            // Czech runs through an on-demand local server; boot the engine in English so
+            // a Czech user isn't left pointing at a server that isn't up yet. If Czech was
+            // the last choice, bring it up asynchronously below.
+            let coqui = CoquiVoiceService(store: store)
+            self.coquiService = coqui
+            let bootLanguage = (settings.language == "cs") ? "en" : settings.language
+            let lv = LocalVoiceController(store: store,
+                                         voice: settings.voice,
+                                         language: bootLanguage,
+                                         listenTarget: settings.listenTarget,
+                                         readAloudMode: settings.readAloudMode)
             lv.start()
             self.localVoice = lv
+
+            // Restore a persisted Czech selection: ensure the voice + server, then switch.
+            if settings.language == "cs" {
+                Task { @MainActor in
+                    if await coqui.ensureReady() { lv.setLanguage("cs") }
+                    else { self.settings.language = "en" }
+                }
+            }
 
             // Global pause/resume hotkey (⌃⌥Space). Carbon RegisterEventHotKey needs no
             // Accessibility grant, so it works even before the user grants dictation perms.
@@ -84,7 +104,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onTogglePause: { [weak self] in self?.localVoice?.togglePause() },
             onOpenLog: { [weak self] in self?.openLog() },
-            onSetVoice: { [weak self] voice in self?.localVoice?.setVoice(voice) }
+            onSetVoice: { [weak self] voice in self?.localVoice?.setVoice(voice) },
+            onSetLanguage: { [weak self] lang in
+                guard let self else { return }
+                if lang == "cs" {
+                    // Czech: prompt+download the voice if needed, start its server, then switch.
+                    Task { @MainActor in
+                        guard let coqui = self.coquiService else { return }
+                        if await coqui.ensureReady() {
+                            self.localVoice?.setLanguage("cs")
+                        } else {
+                            self.settings.language = "en"   // user declined / failed → revert the menu
+                        }
+                    }
+                } else {
+                    self.localVoice?.setLanguage(lang)
+                    self.coquiService?.stopServer()         // free the Czech runtime's memory
+                }
+            },
+            onSetListenTarget: { [weak self] target in self?.localVoice?.setSources(for: target) },
+            onSetReadAloudMode: { [weak self] mode in self?.localVoice?.setReadAloudMode(mode) }
         )
 
         // Orb HUD: the floating orb that reacts to the live voice state.
@@ -129,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         coreSupervisor?.stop()
         localVoice?.stop()
+        coquiService?.stopServer()
     }
 
     /// Start read-only swarm observation iff swarmMode is on. Inert otherwise.

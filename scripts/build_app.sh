@@ -105,6 +105,16 @@ else
     log "WARN: ${ICON_SRC} missing — bundle will use the generic icon"
 fi
 
+# --- bundled scripts (Resources) ----------------------------------------------
+# czech-voice.sh provisions + serves the optional Czech neural voice on demand; the
+# app shells out to it from Contents/Resources.
+CZECH_SRC="${REPO_ROOT}/scripts/czech-voice.sh"
+if [[ -f "${CZECH_SRC}" ]]; then
+    log "copying czech-voice.sh"
+    cp -f "${CZECH_SRC}" "${CONTENTS}/Resources/czech-voice.sh"
+    chmod +x "${CONTENTS}/Resources/czech-voice.sh"
+fi
+
 # --- placeholders so the layout is self-documenting ---------------------------
 cat > "${CONTENTS}/Resources/python/.placeholder" <<'EOF'
 This directory holds the relocatable embedded CPython venv with the voicemode

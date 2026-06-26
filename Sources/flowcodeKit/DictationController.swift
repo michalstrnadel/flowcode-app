@@ -24,7 +24,7 @@ import ApplicationServices
 public final class DictationController {
 
     private let store: VoiceSessionStore
-    private let whisper: WhisperClient
+    private var whisper: WhisperClient
 
     /// Called when capture starts — e.g. to stop read-aloud so the mic doesn't
     /// pick up Claude's own TTS off the speakers.
@@ -42,6 +42,12 @@ public final class DictationController {
     public init(store: VoiceSessionStore, language: String = "en") {
         self.store = store
         self.whisper = WhisperClient(language: language)
+    }
+
+    /// Switch the STT language live (e.g. en ↔ cs). `WhisperClient` is a value type and
+    /// the recording path copies it per turn, so the next dictation uses the new language.
+    public func setLanguage(_ language: String) {
+        whisper = WhisperClient(language: language)
     }
 
     public func start() {

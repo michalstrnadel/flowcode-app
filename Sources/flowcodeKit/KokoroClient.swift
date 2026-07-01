@@ -58,6 +58,10 @@ public final class KokoroTTSEngine: TTSEngine {
 
     private var client: KokoroClient
     private let player = TtsPlayer()
+    private var warmUpTask: Task<Void, Never>?
+    /// WAV cache for invariant short phrases (the spoken ready cue). Keyed by exact
+    /// text; only phrases passed to `precache` ever live here.
+    private var phraseCache: [String: Data] = [:]
 
     public var voice: String { client.voice }
 
@@ -75,6 +79,10 @@ public final class KokoroTTSEngine: TTSEngine {
     }
 
     public func speak(_ text: String) async {
+        if let cached = phraseCache[text] {   // ready cue: skip the synthesis round-trip
+            player.enqueue(cached)
+            return
+        }
         guard let wav = try? await client.synthesize(text) else { return }
         player.enqueue(wav)
     }
@@ -82,8 +90,32 @@ public final class KokoroTTSEngine: TTSEngine {
     public func flush() { player.flush() }
 
     public func warmUp() {
-        // Discard a tiny clip to pay the connection + model spin-up cost up front.
+        // Ping until the service answers. A one-shot ping is useless when Kokoro is
+        // still starting at login — the first real reply then pays the full cold cost
+        // (measured ~9.5s vs 0.38s warm). Called periodically by the controller's
+        // keep-warm tick, each call also doubles as a keep-alive for the model.
+        warmUpTask?.cancel()
         let c = client
-        Task { _ = try? await c.synthesize(".") }
+        warmUpTask = Task {
+            for attempt in 0..<24 {           // ~2 min of patience, then give up quietly
+                if Task.isCancelled { return }
+                if (try? await c.synthesize(".")) != nil { return }
+                let delay = UInt64(min(2 + attempt, 10))
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+            }
+        }
+    }
+
+    /// Pre-synthesize + cache an invariant short phrase (the spoken ready cue) so it
+    /// never costs a synthesis round-trip (~420ms measured) on the reply's critical
+    /// path. No-op if already cached; failures are silent (speak() falls back to a
+    /// normal synthesis for that phrase).
+    public func precache(_ text: String) {
+        guard phraseCache[text] == nil else { return }
+        let c = client
+        Task { @MainActor [weak self] in
+            guard let wav = try? await c.synthesize(text) else { return }
+            self?.phraseCache[text] = wav
+        }
     }
 }

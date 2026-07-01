@@ -48,6 +48,14 @@ public final class LocalVoiceController {
     /// each new batch awaits the previous one before enqueuing its clips.
     private var synthChain: Task<Void, Never> = Task {}
 
+    /// Keep-warm: Kokoro's model goes cold after idle (measured ~9.5s first synthesis
+    /// vs 0.38s warm). While the user's session shows signs of life — transcript
+    /// growing, a dictation, a spoken reply — we ping the engine every couple of
+    /// minutes so the eventual reply starts speaking immediately.
+    private var lastActivity = Date.distantPast
+    private var lastWarmPing = Date.distantPast
+    private var keepWarmTimer: Timer?
+
     public init(store: VoiceSessionStore,
                 voice: String = "af_sky",
                 language: String = "en",
@@ -85,24 +93,40 @@ public final class LocalVoiceController {
 
     public func start() {
         // Warm up the engine so the first real sentence doesn't pay the cold-start cost.
-        engine.warmUp()
+        warmEngine()
         bindEngine()
 
         // Push-to-talk dictation. When the user starts talking, stop read-aloud so
-        // the mic doesn't capture Claude's own TTS off the speakers.
-        dictation.onStartCapture = { [weak self] in self?.flush() }
+        // the mic doesn't capture Claude's own TTS off the speakers. A dictation is
+        // also the strongest "a reply is coming" signal → note it for keep-warm.
+        dictation.onStartCapture = { [weak self] in
+            self?.flush()
+            self?.noteActivity()
+        }
         dictation.start()
 
         store.connected = true   // Model B has no socket; treat as "live".
 
         // New assistant message from any source → speak it.
         startSources()
+
+        // Keep-warm tick: cheap check every 60s; pings the engine only while the
+        // session is active (see keepWarmTick).
+        keepWarmTimer?.invalidate()
+        let t = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.keepWarmTick() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        keepWarmTimer = t
     }
 
     /// Bind every source's callback to speak() and start it. Re-callable (resume / source swap).
     private func startSources() {
         for s in sources {
             let isDesktop = (s is ClaudeDesktopSource)
+            // Transcript growth (tool calls, streaming) = "Claude is working on a
+            // reply" → keep the TTS model warm so that reply starts instantly.
+            (s as? TranscriptReader)?.onActivity = { [weak self] in self?.noteActivity() }
             s.onAssistantText = { [weak self] text in
                 guard let self else { return }
                 // Coordination (Both mode): when a Claude Desktop window is frontmost, the AX
@@ -111,7 +135,14 @@ public final class LocalVoiceController {
                 // the JSONL reader handles terminal Claude Code and the desktop source is already
                 // inert (it's frontmost-gated). Net: exactly one source speaks any given reply.
                 let desktopFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == ClaudeDesktopSource.bundleID
-                if isDesktop ? desktopFront : !desktopFront { self.speak(text) }
+                if isDesktop {
+                    if desktopFront { self.speak(text) }
+                } else if self.listenTarget != .both || !desktopFront {
+                    // Mute the JSONL reader only in Both mode (where the AX source covers the
+                    // same reply). In Claude Code-only mode it is the ONLY source — dropping a
+                    // reply just because Claude Desktop happens to be frontmost loses it forever.
+                    self.speak(text)
+                }
             }
         }
         // Full → stream finished blocks live (speak as Claude writes); Compact/Off settle
@@ -137,6 +168,33 @@ public final class LocalVoiceController {
         dictation.stop()
         engine.flush()
         synthChain.cancel()
+        keepWarmTimer?.invalidate()
+        keepWarmTimer = nil
+    }
+
+    // MARK: - Keep-warm
+
+    private func noteActivity() {
+        lastActivity = Date()
+    }
+
+    /// Ping the engine while (and only while) the session shows recent life, at most
+    /// once every ~2.5 min. Idle Mac → no pings, no wakeups, model may sleep.
+    private func keepWarmTick() {
+        guard !isPaused else { return }
+        guard Date().timeIntervalSince(lastActivity) < 10 * 60 else { return }
+        guard Date().timeIntervalSince(lastWarmPing) > 150 else { return }
+        lastWarmPing = Date()
+        warmEngine()
+    }
+
+    /// warmUp + (for Kokoro) pre-cache the invariant spoken ready cue so it never
+    /// costs a synthesis round-trip on the reply's critical path.
+    private func warmEngine() {
+        engine.warmUp()
+        if let kokoro = engine as? KokoroTTSEngine {
+            kokoro.precache(SpeechText.readyPhrase(for: currentLanguage))
+        }
     }
 
     /// Stop speaking and drop anything queued (the "stop speaking" action).
@@ -223,7 +281,7 @@ public final class LocalVoiceController {
         flush()                       // cancel in-flight synthesis + stop the old engine
         engine = LocalVoiceController.makeEngine(language: currentLanguage, voice: currentVoice)
         bindEngine()
-        engine.warmUp()
+        warmEngine()
     }
 
     /// Inspection hook for the selftest (proves the Claude Code path is unchanged).
@@ -235,6 +293,7 @@ public final class LocalVoiceController {
 
     private func speak(_ raw: String) {
         guard !isPaused, readAloudMode != .off else { return }
+        noteActivity()   // a reply landed → the conversation is live; stay warm
         let prepared = readAloudMode == .compact ? SpeechText.compact(raw) : raw
         var sentences = SpeechText.sentences(from: prepared)
         guard !sentences.isEmpty else { return }

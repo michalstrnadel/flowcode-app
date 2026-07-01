@@ -426,6 +426,99 @@ func readyAlertChecks() {
                  "ready phrase is already clean speakable text")
 }
 
+// MARK: - transcript reader (model B core parser — fixture-driven, no timers)
+
+@MainActor
+func transcriptReaderChecks() {
+    print("== transcript reader ==")
+    let fm = FileManager.default
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("fc-selftest-transcripts-\(getpid())", isDirectory: true)
+    let proj = root.appendingPathComponent("proj1", isDirectory: true)
+    try? fm.createDirectory(at: proj, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: root) }
+
+    let s1 = proj.appendingPathComponent("s1.jsonl")
+
+    func assistantLine(_ text: String) -> String {
+        #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\#(text)"}]}}"# + "\n"
+    }
+    func append(_ str: String, to url: URL) {
+        if !fm.fileExists(atPath: url.path) { fm.createFile(atPath: url.path, contents: nil) }
+        guard let fh = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? fh.close() }
+        _ = try? fh.seekToEnd()
+        try? fh.write(contentsOf: Data(str.utf8))
+    }
+    func touch(_ url: URL, at date: Date) {
+        try? fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+    }
+
+    append(assistantLine("history"), to: s1)
+
+    let reader = TranscriptReader(projectRoots: [root])
+    var emitted: [String] = []
+    reader.onAssistantText = { emitted.append($0) }
+
+    reader.pollNow()                                   // first sight → baseline at EOF
+    checks.check(emitted.isEmpty, "pre-existing history is never spoken")
+
+    append(assistantLine("first reply"), to: s1)
+    reader.pollNow()
+    checks.check(emitted == ["first reply"], "new assistant line spoken once")
+    reader.pollNow()
+    checks.check(emitted == ["first reply"], "idle poll never re-speaks (offset advanced by bytes read)")
+
+    // A line split across two polls must yield exactly one correctly-parsed emit.
+    let split = assistantLine("split line")
+    let cut = split.index(split.startIndex, offsetBy: 25)
+    append(String(split[..<cut]), to: s1)
+    reader.pollNow()
+    checks.check(emitted == ["first reply"], "half-written line held as carryover, not spoken")
+    append(String(split[cut...]), to: s1)
+    reader.pollNow()
+    checks.check(emitted == ["first reply", "split line"], "completed carryover line spoken once")
+
+    // A reply that includes a tool_use block is tool narration → skipped whole.
+    append(#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"narration"},{"type":"tool_use","name":"Bash","input":{}}]}}"# + "\n", to: s1)
+    reader.pollNow()
+    checks.check(!emitted.contains("narration"), "message containing tool_use is skipped")
+
+    // Truncation / rewrite (session compaction, sync tools) re-baselines at the new
+    // end — the never-speak-history contract — instead of replaying the whole file.
+    try? Data(assistantLine("rewritten history").utf8).write(to: s1)
+    reader.pollNow()
+    checks.check(!emitted.contains("rewritten history"), "truncated/rewritten file re-baselines, never replays")
+    append(assistantLine("after truncation"), to: s1)
+    reader.pollNow()
+    checks.check(emitted.last == "after truncation", "appends after truncation are spoken")
+
+    // Only the ACTIVE (most recently modified) session speaks; background sessions
+    // advance their offsets silently.
+    let s2 = proj.appendingPathComponent("s2.jsonl")
+    append(assistantLine("s2 history"), to: s2)
+    reader.pollNow()                                   // baseline s2
+    append(assistantLine("background reply"), to: s1)
+    append(assistantLine("active reply"), to: s2)
+    touch(s1, at: Date(timeIntervalSinceNow: -60))     // s1 = background
+    touch(s2, at: Date())                              // s2 = active
+    reader.pollNow()
+    checks.check(emitted.contains("active reply") && !emitted.contains("background reply"),
+                 "only the active session is spoken; background sessions stay silent")
+
+    // start() re-baselines every file (the pause → resume contract in
+    // LocalVoiceController.resume()): the paused backlog is skipped, new replies speak.
+    reader.stop()
+    append(assistantLine("while paused"), to: s2)
+    reader.start()
+    reader.pollNow()
+    checks.check(!emitted.contains("while paused"), "resume skips the backlog accumulated while paused")
+    append(assistantLine("after resume"), to: s2)
+    reader.pollNow()
+    checks.check(emitted.last == "after resume", "new replies after resume are spoken")
+    reader.stop()
+}
+
 // MARK: - watchdog wait-status decode (phase 9)
 //
 // The watchdog (Helpers/flowcode-watchdog) decodes the Darwin wait(2) status by
@@ -458,6 +551,7 @@ await loopbackChecks()
 await metalChecks()
 swarmChecks()
 modelBChecks()
+transcriptReaderChecks()
 speechTextChecks()
 languageProfileChecks()
 messageSettlerChecks()

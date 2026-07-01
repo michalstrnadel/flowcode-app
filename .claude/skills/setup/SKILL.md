@@ -21,9 +21,12 @@ It is safe to re-run. Useful flags:
 - `--skip-services` — the Kokoro/Whisper services are already running.
 - `--with-core` — also build the embedded Python voice core (only for the experimental
   socket/barge-in mode; NOT needed for the default read-aloud + dictation).
-- `--model small` — pick a different Whisper model (default `base`).
-- `SIGN_IDENTITY=flowcode-dev scripts/setup.sh` — sign with a stable cert so the
-  macOS permission grants survive rebuilds (otherwise the build is ad-hoc signed).
+- `--model medium` — pick a different Whisper model (default `small`, multilingual).
+- `--mcp-cleanup` — remove the voicemode MCP entry from `~/.claude.json` (opt-in;
+  ask the user first — they may use the voicemode MCP independently).
+- `SIGN_IDENTITY=...` — sign with a specific cert. Without it, setup finds a
+  Developer ID / existing dev cert, or creates a stable self-signed
+  `flowcode-local` cert so the macOS permission grants survive rebuilds.
 
 ## The one part the script can't do: permissions
 

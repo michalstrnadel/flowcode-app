@@ -79,14 +79,21 @@ beside it. **English out of the box; Czech one click away.**
 | 🗣️ **Kokoro TTS** | Local English text-to-speech (`127.0.0.1:8880`) — read-aloud, with a pickable voice. |
 | 🇨🇿 **Czech (optional)** | On-demand neural voice (Coqui VITS) + multilingual Whisper — downloaded only when you pick Czech. |
 | ✍️ **Whisper STT** | Local speech-to-text (`127.0.0.1:2022`) — push-to-talk dictation, English & Czech. |
-| 🖥️ **macOS 14+** | Apple Silicon & Intel. Menu-bar agent, no Dock icon. |
+| 🖥️ **macOS 14+** | Apple Silicon (M-series). Menu-bar agent, no Dock icon. |
 | ⌨️ **Your terminal / editor** | Warp, Terminal, iTerm2, VS Code… dictation pastes into the focused app. |
 
 ## Install
 
 flowcode is **installed by an AI coding agent** (Claude Code) — there's intentionally no
 prebuilt download. The agent handles the whole setup: voice services, build, and walking you
-through the two macOS permission toggles. Requires **macOS 14+**.
+through the two macOS permission toggles. Requires **macOS 14+ on Apple Silicon** (the local
+TTS stack has no Intel builds) and the **Xcode 16+ Command Line Tools** (Swift 6).
+
+> **What a first install actually costs:** ~3–5 GB of downloads/builds (whisper.cpp compile +
+> multilingual Whisper model + Kokoro TTS with its PyTorch runtime), typically 15–45 minutes
+> depending on your connection. The two voice services then stay resident (~1.5–2 GB RAM).
+> If the final health check says a service isn't listening yet, it's usually still
+> downloading — re-run `scripts/setup.sh` a few minutes later.
 
 ### Recommended — let Claude Code install it
 

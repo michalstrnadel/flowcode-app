@@ -19,15 +19,17 @@ each new assistant reply **aloud** (local Kokoro TTS; optional Czech neural voic
 
 1. **Check prerequisites** (don't silently `sudo`-install; if one is missing, tell the user the
    one command to run): `brew`, `uv` (https://docs.astral.sh/uv/), and `swift` (`xcode-select -p`).
-   macOS must be 14+.
+   macOS must be 14+ on **Apple Silicon** (the local TTS stack has no Intel builds). Warn the
+   user that a first install downloads/builds ~3–5 GB and can take 15–45 minutes.
 
 2. **Run the setup script and report its phase output to the user:**
    ```sh
    scripts/setup.sh
    ```
-   It installs Kokoro + Whisper (via the voicemode installer), builds + signs the app, removes the
-   unused voicemode MCP from `~/.claude.json`, and opens the right System Settings panes. It is
-   idempotent and exits non-zero on failure. (Equivalent: the bundled **`/setup`** skill.)
+   It installs Kokoro + Whisper (via the voicemode installer), builds + signs the app, and opens
+   the right System Settings panes. It is idempotent and exits non-zero on failure. It does NOT
+   touch `~/.claude.json` unless you pass `--mcp-cleanup` — ask the user before using that flag.
+   (Equivalent: the bundled **`/setup`** skill.)
 
 3. **Hand the permissions to the user** — macOS (TCC/SIP) makes these *impossible* to grant from a
    script or by an agent. Tell the user to open **System Settings → Privacy & Security** and enable
@@ -39,7 +41,8 @@ each new assistant reply **aloud** (local Kokoro TTS; optional Czech neural voic
    Then have them **relaunch** the app. (Dev builds are signed with a stable local cert, so the
    grant survives rebuilds on this machine.)
 
-4. **Launch it** (if setup didn't): `open /Applications/flowcode.app`.
+4. **Launch it** (if setup didn't): `open dist/flowcode.app` — the app is built into the
+   repo's `dist/`; nothing is installed to /Applications.
 
 5. **Optional — Czech voice.** Only if the user wants Czech. It's downloaded on demand (the menu
    prompts), or pre-install it now:

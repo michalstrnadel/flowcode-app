@@ -119,9 +119,15 @@ public final class DictationController {
     private func startRecording() {
         guard !recording else { return }
         if micDenied {
-            NSSound.beep()   // mic was denied before — don't silently no-op
-            NSLog("flowcode: microphone access denied — enable it in System Settings › Privacy & Security › Microphone.")
-            return
+            // Re-check: the user may have granted mic access since the denial. Only a
+            // real TCC denial keeps the latch; anything else retries.
+            if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
+                micDenied = false
+            } else {
+                NSSound.beep()   // mic was denied before — don't silently no-op
+                NSLog("flowcode: microphone access denied — enable it in System Settings › Privacy & Security › Microphone.")
+                return
+            }
         }
         recording = true
         onStartCapture?()                 // stop read-aloud so we don't capture TTS
@@ -159,10 +165,15 @@ public final class DictationController {
             try engine.start()
             self.engine = engine
         } catch {
-            NSLog("flowcode: dictation engine failed (mic denied?): \(error)")
+            NSLog("flowcode: dictation engine failed: \(error)")
             input.removeTap(onBus: 0)
             recording = false
-            micDenied = true     // don't retry-fail silently on every press
+            // Latch ONLY on a real permission denial. engine.start() also fails
+            // transiently (Bluetooth handoff, input device switching) — latching on
+            // those would kill dictation until relaunch even though the mic is fine
+            // one second later. Transient failures beep and retry on the next press.
+            let auth = AVCaptureDevice.authorizationStatus(for: .audio)
+            micDenied = (auth == .denied || auth == .restricted)
             NSSound.beep()
             resetOrb()
         }
@@ -212,15 +223,32 @@ public final class DictationController {
 
     // MARK: - Text insertion (pasteboard + Cmd-V)
 
+    /// The user clipboard captured before the FIRST of a run of quick dictations, so a
+    /// second dictation within the restore window never "saves" the first transcript.
+    private var pendingRestore: String?
+    /// changeCount of our own paste — restore fires only if this is still current.
+    private var restoreStamp = 0
+
     private func insert(_ text: String) {
         let pb = NSPasteboard.general
-        let saved = pb.string(forType: .string)
+        // If a previous dictation's restore hasn't fired yet, the pasteboard holds OUR
+        // previous transcript — keep carrying the user's original clipboard instead.
+        let saved = pendingRestore ?? pb.string(forType: .string)
         pb.clearContents()
         pb.setString(text, forType: .string)
+        let stamp = pb.changeCount
+        pendingRestore = saved
+        restoreStamp = stamp
         postCmdV()
         // Restore the user's previous clipboard after the paste is consumed. 1.5s is a
         // safer margin than 0.6s for a momentarily busy target app.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, self.restoreStamp == stamp else { return }  // superseded by a newer dictation
+            self.pendingRestore = nil
+            // If anything else wrote to the pasteboard since our paste (the user copied
+            // something), restoring now would clobber it — leave the pasteboard alone.
+            guard pb.changeCount == stamp else { return }
             if let saved {
                 pb.clearContents()
                 pb.setString(saved, forType: .string)

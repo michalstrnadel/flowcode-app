@@ -6,6 +6,43 @@ All notable changes to flowcode are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **Read-aloud reliability** — the transcript tailer no longer re-speaks or drops a reply when
+  Claude Code appends mid-poll (stale byte-offset bug); a truncated/rewritten session file
+  (compaction, sync tools) re-baselines instead of reading the whole history aloud; and
+  **Pause ▸ Resume no longer replays every reply from the pause window** — it skips the backlog,
+  as the menu always promised.
+- **"Listen to ▸ Claude Code" no longer loses replies** that land while the Claude Desktop app
+  happens to be frontmost (the reply was previously dropped, not deferred).
+- **Dictation no longer dies until relaunch** after a transient mic failure (Bluetooth handoff,
+  input-device switch) — only a real permission denial disables it, and granting the permission
+  later recovers without a restart.
+- **Dictation no longer clobbers your clipboard**: the post-paste restore now backs off if you
+  copied something in the meantime, and rapid back-to-back dictations keep your original
+  clipboard instead of "restoring" the previous transcript.
+- Honor `$CLAUDE_CONFIG_DIR` when locating Claude Code session transcripts.
+
+### Changed
+- **First audio is much faster.** Kokoro is kept warm while a session is active (a cold model
+  cost ~9.5 s on the first reply after idle vs 0.38 s warm), the spoken ready cue is synthesized
+  once and cached instead of on every reply (~0.4 s saved per reply), and new replies are
+  detected within 0.1 s instead of 0.25 s.
+- **Install honesty & safety** (`scripts/setup.sh`): creates a stable self-signed `flowcode-local`
+  signing cert when none exists, so macOS permission grants **survive updates** (ad-hoc builds
+  lost Accessibility/Mic on every rebuild); signs with Hardened Runtime + entitlements; the
+  Whisper `--model` flag now actually installs the requested model (it was silently ignored —
+  Czech users got `base` instead of `small`); editing `~/.claude.json` is now **opt-in**
+  (`--mcp-cleanup`); Apple Silicon is checked up front; the first-install health wait is longer
+  and explains that services may still be downloading.
+- The optional Czech TTS server now binds to `127.0.0.1` only (Coqui's `tts-server` defaults to
+  listening on **all interfaces** with no way to configure it).
+- README/AGENTS.md now state the real requirements (Apple Silicon, Xcode 16+, ~3–5 GB first
+  install) — the "Intel" claim was never satisfiable by the dependency chain.
+
+### Added
+- Selftest coverage for the transcript tailer (11 new checks: history baseline, partial-line
+  carryover, truncation, active-session selection, pause/resume) — 103 checks total.
+
 ## [0.3.0] — 2026-06-26
 
 ### Added

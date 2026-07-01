@@ -24,6 +24,11 @@ public final class TranscriptReader {
     /// Fired with the raw assistant prose for each new assistant message.
     public var onAssistantText: ((String) -> Void)?
 
+    /// Fired whenever the ACTIVE session file grows (any append — tool calls included,
+    /// not just prose). A cheap "Claude is working" signal the controller uses to keep
+    /// the TTS model warm so the eventual reply doesn't pay the cold-start cost.
+    public var onActivity: (() -> Void)?
+
     private let projectRoots: [URL]
     private var timer: Timer?
     // Per-file byte offset + partial-line carryover. Tracking EVERY session file
@@ -43,16 +48,28 @@ public final class TranscriptReader {
             //   ~/.claude-personal/projects (this machine's real sessions)
             //   ~/.claude-work/projects     (symlink → personal here; deduped by realpath)
             let home = FileManager.default.homeDirectoryForCurrentUser
-            self.projectRoots = [".claude/projects", ".claude-personal/projects", ".claude-work/projects"]
+            var roots = [".claude/projects", ".claude-personal/projects", ".claude-work/projects"]
                 .map { home.appendingPathComponent($0, isDirectory: true) }
+            // Honor a custom config dir (same variable Claude Code itself uses).
+            if let custom = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !custom.isEmpty {
+                roots.insert(URL(fileURLWithPath: custom, isDirectory: true)
+                    .appendingPathComponent("projects", isDirectory: true), at: 0)
+            }
+            self.projectRoots = roots
         }
     }
 
     public func start() {
         stop()
-        // 0.25s: read-aloud starts within a quarter second of Claude finishing a message.
-        // The poll is just fstat + tail of appended bytes per file, so CPU cost is negligible.
-        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+        // Re-baseline: drop all per-file state so the first poll() baselines every
+        // file at its CURRENT end. This is what makes pause → resume skip the backlog
+        // (see LocalVoiceController.resume()) instead of replaying it.
+        offsets.removeAll()
+        partials.removeAll()
+        // 0.1s: read-aloud starts within a tenth of a second of Claude finishing a
+        // message. The poll is just fstat + tail of appended bytes per file, so CPU
+        // cost is negligible even at this rate.
+        let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -63,6 +80,12 @@ public final class TranscriptReader {
     public func stop() {
         timer?.invalidate()
         timer = nil
+    }
+
+    /// Run one poll synchronously. For the selftest, which needs deterministic
+    /// tailing without waiting on the timer.
+    public func pollNow() {
+        poll()
     }
 
     // MARK: - Polling
@@ -103,10 +126,14 @@ public final class TranscriptReader {
 
     private func tail(_ path: String, from off: UInt64, speak: Bool) {
         let size = fileSize(path)
-        var offset = off
-        if size < offset {                // file truncated / rotated
-            offset = 0
+        let offset = off
+        if size < offset {                // file truncated / rewritten
+            // Re-baseline at the new end — the rewritten content is history, and the
+            // contract is "never speak history". Rewinding to 0 here would read the
+            // whole file aloud (e.g. after session compaction or a sync tool rewrite).
+            offsets[path] = size
             partials[path] = Data()
+            return
         }
         guard size > offset, let fh = FileHandle(forReadingAtPath: path) else {
             offsets[path] = offset
@@ -116,7 +143,11 @@ public final class TranscriptReader {
         do {
             try fh.seek(toOffset: offset)
             let chunk = try fh.readToEnd() ?? Data()
-            offsets[path] = size
+            // Advance by what was actually read. readToEnd() sees the file's REAL end
+            // at read time, which can be past the fstat `size` if Claude Code appended
+            // in between — storing `size` here would re-read (and re-speak) that gap.
+            offsets[path] = offset + UInt64(chunk.count)
+            if speak, !chunk.isEmpty { onActivity?() }   // active session is growing
 
             var buf = (partials[path] ?? Data()) + chunk
             while let nl = buf.firstIndex(of: 0x0A) {

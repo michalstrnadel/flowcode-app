@@ -45,8 +45,19 @@ case "${1:-}" in
         ;;
     serve)
         have_uv || { echo "error: 'uv' is required"; exit 3; }
+        # SECURITY: tts-server hardcodes app.run(host="::") — ALL interfaces, no
+        # --host flag — which would expose the Czech TTS to the local network.
+        # The server module parses argv and loads the model at IMPORT time, so a
+        # tiny wrapper can import it and bind the same Flask app to loopback only.
         # exec so signals (and the watchdog's process-group kill) reach the server directly.
-        exec uvx "${UVX_ARGS[@]}" tts-server --model_name "${MODEL}" --port "${PORT}"
+        FLOWCODE_TTS_MODEL="${MODEL}" FLOWCODE_TTS_PORT="${PORT}" \
+        exec uvx "${UVX_ARGS[@]}" python -c '
+import os, sys
+port = os.environ["FLOWCODE_TTS_PORT"]
+sys.argv = ["tts-server", "--model_name", os.environ["FLOWCODE_TTS_MODEL"], "--port", port]
+from TTS.server import server   # parses argv + loads the model at import time
+server.app.run(host="127.0.0.1", port=int(port))
+'
         ;;
     *)
         echo "usage: czech-voice.sh {check|install|serve} [port]"; exit 2

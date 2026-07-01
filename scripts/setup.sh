@@ -11,10 +11,13 @@
 #   2. Install + start Kokoro (TTS, :8880) and Whisper (STT, :2022) as launchd agents,
 #      delegating to the voicemode service installer (it renders per-user launchd plists
 #      with the current $HOME — no hardcoded paths).
-#   3. Build + sign dist/flowcode.app (reusing preflight.sh / build_app.sh; ad-hoc sign
-#      unless SIGN_IDENTITY is set).
+#   3. Build + sign dist/flowcode.app (reusing preflight.sh / build_app.sh) with
+#      Hardened Runtime. Signing identity: SIGN_IDENTITY if set, else Developer ID,
+#      else an existing self-signed cert, else a stable self-signed 'flowcode-local'
+#      cert is created once — so TCC grants survive rebuilds (ad-hoc is last resort).
 #   4. Guide the one-time Microphone + Accessibility grants (macOS can't script these).
-#   5. Remove the now-unused voicemode MCP from ~/.claude.json (Model B doesn't use it).
+#   5. Optionally (--mcp-cleanup) remove the voicemode MCP from ~/.claude.json —
+#      opt-in, because users may run the voicemode MCP independently of flowcode.
 #   6. Health-check and print a PASS/FAIL summary.
 #
 # Flags / env:
@@ -22,7 +25,8 @@
 #                      needed for Model B — only the experimental socket path uses it)
 #   --skip-services    don't install/start Kokoro/Whisper
 #   --skip-build       don't build the app
-#   --skip-mcp-cleanup don't touch ~/.claude.json
+#   --mcp-cleanup      remove the voicemode MCP entry from ~/.claude.json (backed up)
+#   --skip-mcp-cleanup accepted for compatibility (cleanup is already opt-in)
 #   --model NAME       Whisper model for the service install (default: small). Use a
 #                      MULTILINGUAL model (no ".en" suffix) — Czech dictation needs it.
 #                      "small" gives roughly 2x better Czech accuracy than "base".
@@ -41,7 +45,7 @@ source "${REPO_ROOT}/version.env"
 WITH_CORE=0
 SKIP_SERVICES=0
 SKIP_BUILD=0
-SKIP_MCP=0
+DO_MCP=0       # --mcp-cleanup: OPT-IN — editing ~/.claude.json breaks users who run the voicemode MCP independently
 SKIP_PERMISSIONS=0   # --skip-permissions: don't reopen the System Settings panes (used by the in-app updater)
 WITH_CZECH=0   # --czech: pre-install the optional Czech neural voice (else on-demand from the menu)
 # Default to a MULTILINGUAL model so Czech dictation works out of the box. "small" is
@@ -52,7 +56,8 @@ while [ $# -gt 0 ]; do
         --with-core)        WITH_CORE=1 ;;
         --skip-services)    SKIP_SERVICES=1 ;;
         --skip-build)       SKIP_BUILD=1 ;;
-        --skip-mcp-cleanup) SKIP_MCP=1 ;;
+        --mcp-cleanup)      DO_MCP=1 ;;
+        --skip-mcp-cleanup) DO_MCP=0 ;;   # compatibility (older docs / the in-app updater)
         --skip-permissions) SKIP_PERMISSIONS=1 ;;
         --czech)            WITH_CZECH=1 ;;
         --model)            shift; WHISPER_MODEL="${1:-small}" ;;
@@ -74,10 +79,12 @@ fail() { printf '  \033[1;31mFAIL\033[0m %s\n' "$*"; FAILURES=$((FAILURES + 1));
 port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 kokoro_responds() { curl -fsS --max-time 4 "http://127.0.0.1:8880/v1/audio/voices" >/dev/null 2>&1; }
 
-# Wait up to ~60s for a port to come up (services compile/download on first run).
+# Wait up to ~180s for a port to come up. A FIRST install compiles whisper.cpp and
+# downloads models (can take many minutes on slow networks) — 60s produced false
+# FAILs while the install was still legitimately progressing.
 wait_for_port() {
     local port="$1" i
-    for i in $(seq 1 30); do
+    for i in $(seq 1 90); do
         if port_open "${port}"; then return 0; fi
         sleep 2
     done
@@ -92,7 +99,10 @@ detect_voicemode() {
     for cand in "${FLOWCODE_CORE_CWD:-}/.venv/bin/voicemode" "${REPO_ROOT}/../voicemode/.venv/bin/voicemode"; do
         if [ -x "${cand}" ]; then VM_CMD=("${cand}"); return 0; fi
     done
-    if command -v uvx >/dev/null 2>&1; then VM_CMD=(uvx --from voice-mode voicemode); return 0; fi
+    # Pinned: a fresh clone always lands here, and an unpinned `uvx --from voice-mode`
+    # tracks upstream-latest — a moving target this repo never tests against. Bump the
+    # pin deliberately (and re-test setup) rather than implicitly.
+    if command -v uvx >/dev/null 2>&1; then VM_CMD=(uvx --from 'voice-mode==8.10.2' voicemode); return 0; fi
     return 1
 }
 
@@ -100,14 +110,28 @@ detect_voicemode() {
 # Phase 1 — prerequisites
 # ==============================================================================
 sect "prerequisites"
+# The local TTS stack (Kokoro-FastAPI) pins a PyTorch with no macOS x86_64 wheels —
+# on an Intel Mac the service install fails deep inside a launchd log. Fail up front
+# with a clear message instead.
+if [ "$(uname -m)" = "arm64" ]; then ok "Apple Silicon ($(uname -m))"; else
+    fail "unsupported CPU ($(uname -m)) — flowcode's local voice stack requires Apple Silicon (PyTorch dropped macOS x86_64 builds)"
+fi
 if command -v brew >/dev/null 2>&1; then ok "Homebrew present"; else
     warn "Homebrew not found — install it: https://brew.sh (then re-run)"
 fi
 if command -v uv >/dev/null 2>&1; then ok "uv present"; else
-    warn "uv not found — install it: https://docs.astral.sh/uv/ (or: brew install uv)"
+    # Without uv there is no uvx fallback for the service installer — on a machine
+    # with no voicemode checkout that means Phase 2 cannot install Kokoro/Whisper.
+    if [ "${SKIP_SERVICES}" = 1 ] || command -v voicemode >/dev/null 2>&1; then
+        warn "uv not found — install it: https://docs.astral.sh/uv/ (or: brew install uv)"
+    else
+        fail "uv not found and no voicemode on PATH — the voice services cannot be installed. Install uv first: brew install uv"
+    fi
 fi
-if command -v swift >/dev/null 2>&1; then ok "swift present ($(swift --version 2>/dev/null | head -1))"; else
-    fail "swift not found — install Xcode or the Command Line Tools: xcode-select --install"
+# `command -v swift` passes even on a CLT-less Mac (the /usr/bin shim exists);
+# actually running it is the honest probe.
+if swift --version >/dev/null 2>&1; then ok "swift present ($(swift --version 2>/dev/null | head -1))"; else
+    fail "swift toolchain not usable — install Xcode or the Command Line Tools: xcode-select --install (Swift 6 / Xcode 16+ required)"
 fi
 if command -v jq >/dev/null 2>&1; then ok "jq present"; else
     warn "jq not found — voicemode MCP cleanup will be skipped (brew install jq)"
@@ -144,9 +168,19 @@ else
             *.en) warn "model '${WHISPER_MODEL}' is English-only — Czech dictation will NOT work. Use a multilingual model (e.g. 'small')." ;;
         esac
         log "installing Whisper (STT) service (model: ${WHISPER_MODEL})…"
-        "${VM_CMD[@]}" service install whisper --model "${WHISPER_MODEL}" \
-            || "${VM_CMD[@]}" service install whisper \
-            || fail "voicemode service install whisper failed"
+        # NOTE: `service install whisper` has NO --model option (it rejected the flag and
+        # a || fallback silently installed the default model — the promised model never
+        # landed). The model-aware installer is `whisper service install`; the env var
+        # covers the runtime config for either path.
+        VOICEMODE_WHISPER_MODEL="${WHISPER_MODEL}" "${VM_CMD[@]}" whisper service install --model "${WHISPER_MODEL}" \
+            || fail "voicemode whisper service install failed"
+        # Verify the requested model actually landed instead of trusting the exit code.
+        if ls "${HOME}/.voicemode/services/whisper/models/ggml-${WHISPER_MODEL}"*.bin >/dev/null 2>&1 \
+           || ls "${HOME}/.voicemode/whisper.cpp/models/ggml-${WHISPER_MODEL}"*.bin >/dev/null 2>&1; then
+            ok "whisper model '${WHISPER_MODEL}' present"
+        else
+            warn "whisper model '${WHISPER_MODEL}' not found on disk — dictation may run a default model (try: voicemode whisper model install ${WHISPER_MODEL})"
+        fi
     fi
 fi
 
@@ -169,18 +203,80 @@ else
     find "${APP}/Contents/Frameworks" "${APP}/Contents/Resources/python" \
         -name '.placeholder' -delete 2>/dev/null || true
 
+    # Create (once) a stable self-signed codesigning cert. Ad-hoc signing gets a new
+    # code hash every build, so macOS silently DROPS the Accessibility + Microphone
+    # grants after each rebuild/update — dictation "randomly stops working". A stable
+    # identity keeps the grants across rebuilds. Falls back to ad-hoc on any failure.
+    ensure_local_identity() {
+        local name="flowcode-local" tmp keychain="${HOME}/Library/Keychains/login.keychain-db"
+        if security find-identity -p codesigning 2>/dev/null | grep -q "\"${name}\""; then
+            printf '%s' "${name}"; return 0
+        fi
+        command -v openssl >/dev/null 2>&1 || return 1
+        tmp="$(mktemp -d)" || return 1
+        (
+            cd "${tmp}" || exit 1
+            cat > cert.cnf <<'CNF'
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = flowcode-local
+[ext]
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+basicConstraints = critical,CA:false
+CNF
+            openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
+                -keyout key.pem -out cert.pem -config cert.cnf >/dev/null 2>&1 \
+            && openssl pkcs12 -export -out id.p12 -inkey key.pem -in cert.pem \
+                -name "${name}" -passout pass:flowcode >/dev/null 2>&1 \
+            && security import id.p12 -k "${keychain}" -P flowcode -T /usr/bin/codesign >/dev/null 2>&1 \
+            && security add-trusted-cert -p codeSign -k "${keychain}" cert.pem >/dev/null 2>&1
+        ) || { rm -rf "${tmp}"; return 1; }
+        rm -rf "${tmp}"
+        security find-identity -p codesigning 2>/dev/null | grep -q "\"${name}\"" || return 1
+        printf '%s' "${name}"
+    }
+
+    # True if codesign can ACTUALLY sign with this identity (covers trust + key
+    # access, which find-identity alone doesn't prove).
+    can_sign_with() {
+        local id="$1" t rc
+        t="$(mktemp -d)" || return 1
+        cp /bin/ls "${t}/probe" 2>/dev/null || { rm -rf "${t}"; return 1; }
+        codesign --force --sign "${id}" "${t}/probe" >/dev/null 2>&1
+        rc=$?
+        rm -rf "${t}"
+        return "${rc}"
+    }
+
     SIGN_ID="${SIGN_IDENTITY:-}"
     if [ -z "${SIGN_ID}" ]; then
         if security find-identity -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
             SIGN_ID="$(security find-identity -p codesigning | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')"
             log "found Developer ID — signing with it"
+        elif security find-identity -p codesigning 2>/dev/null | grep -q '"flowcode-dev"'; then
+            SIGN_ID="flowcode-dev"   # pre-existing dev cert on this machine
+            log "using existing self-signed 'flowcode-dev'"
         else
-            SIGN_ID="-"
-            warn "no signing identity — using ad-hoc (-). Gatekeeper warns on first open; TCC re-prompts each rebuild."
-            warn "Tip: set SIGN_IDENTITY (e.g. your stable self-signed 'flowcode-dev') so grants survive rebuilds."
+            log "no signing identity — creating a stable self-signed 'flowcode-local' cert"
+            log "(one-time; macOS may ask for your login password to trust it)"
+            if SIGN_ID="$(ensure_local_identity)" && can_sign_with "${SIGN_ID}"; then
+                ok "signing with 'flowcode-local' — TCC grants will survive rebuilds"
+            else
+                SIGN_ID="-"
+                warn "could not create a stable cert — using ad-hoc (-). Gatekeeper warns on first open; TCC re-prompts each rebuild."
+                warn "Tip: set SIGN_IDENTITY to a stable self-signed cert so grants survive rebuilds."
+            fi
         fi
     fi
-    CODESIGN_ARGS=(--force --sign "${SIGN_ID}")
+    # Hardened Runtime + entitlements (mic, library validation for the optional Python
+    # sidecar): without --options runtime the app is a TCC-privileged (Accessibility +
+    # Mic) process that any same-user process can inject code into (DYLD_INSERT_LIBRARIES).
+    ENTITLEMENTS="${SCRIPT_DIR}/flowcode.entitlements"
+    CODESIGN_ARGS=(--force --options runtime --entitlements "${ENTITLEMENTS}" --sign "${SIGN_ID}")
     if [ -n "${SIGN_KEYCHAIN:-}" ]; then
         security unlock-keychain "${SIGN_KEYCHAIN}" 2>/dev/null || true
         CODESIGN_ARGS=(--keychain "${SIGN_KEYCHAIN}" "${CODESIGN_ARGS[@]}")
@@ -188,7 +284,7 @@ else
     # Inside-out: helper first, bundle last.
     codesign "${CODESIGN_ARGS[@]}" "${APP}/Contents/Helpers/flowcode-watchdog" 2>/dev/null || true
     codesign "${CODESIGN_ARGS[@]}" "${APP}"
-    if codesign --verify --strict "${APP}" 2>/dev/null; then ok "signed (${SIGN_ID}) + verified"; else fail "codesign verify failed"; fi
+    if codesign --verify --strict "${APP}" 2>/dev/null; then ok "signed (${SIGN_ID}, hardened runtime) + verified"; else fail "codesign verify failed"; fi
 fi
 
 # ==============================================================================
@@ -206,10 +302,12 @@ else
 fi
 
 # ==============================================================================
-# Phase 5 — remove the unused voicemode MCP (Model B doesn't use it)
+# Phase 5 — optionally remove the unused voicemode MCP (OPT-IN: --mcp-cleanup)
 # ==============================================================================
-if [ "${SKIP_MCP}" = 1 ]; then
+if [ "${DO_MCP}" != 1 ]; then
     sect "voicemode MCP cleanup (skipped)"
+    log "Not touching ~/.claude.json. If you don't use the voicemode MCP elsewhere,"
+    log "re-run with --mcp-cleanup to remove its (unused-by-flowcode) entry."
 elif ! command -v jq >/dev/null 2>&1; then
     sect "voicemode MCP cleanup"
     warn "jq not found — skipping (brew install jq, then re-run)"
@@ -256,9 +354,13 @@ fi
 # ==============================================================================
 sect "health"
 if [ "${SKIP_SERVICES}" != 1 ]; then
-    if wait_for_port 8880 kokoro; then ok "Kokoro :8880 listening"; else fail "Kokoro :8880 not listening (see ~/.voicemode/logs/kokoro)"; fi
+    if wait_for_port 8880 kokoro; then ok "Kokoro :8880 listening"; else
+        fail "Kokoro :8880 not listening yet — a FIRST install downloads models for several minutes; re-run scripts/setup.sh later or watch ~/.voicemode/logs/kokoro"
+    fi
     if kokoro_responds; then ok "Kokoro responding to /v1/audio/voices"; else warn "Kokoro port open but /v1/audio/voices not ready yet (still warming up?)"; fi
-    if wait_for_port 2022 whisper; then ok "Whisper :2022 listening"; else fail "Whisper :2022 not listening (see ~/.voicemode/logs/whisper)"; fi
+    if wait_for_port 2022 whisper; then ok "Whisper :2022 listening"; else
+        fail "Whisper :2022 not listening yet — a FIRST install compiles whisper.cpp + downloads the model; re-run scripts/setup.sh later or watch ~/.voicemode/logs/whisper"
+    fi
 fi
 if [ "${SKIP_BUILD}" != 1 ]; then
     if [ -d "${REPO_ROOT}/dist/flowcode.app" ]; then ok "app built: dist/flowcode.app"; else fail "dist/flowcode.app missing"; fi

@@ -6,6 +6,8 @@ All notable changes to flowcode are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-02
+
 ### Fixed
 - **Read-aloud reliability** — the transcript tailer no longer re-speaks or drops a reply when
   Claude Code appends mid-poll (stale byte-offset bug); a truncated/rewritten session file
